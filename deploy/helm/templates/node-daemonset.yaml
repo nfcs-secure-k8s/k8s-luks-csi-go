@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: luks-csi-node
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    matchLabels: { app: luks-csi-node }
+  template:
+    metadata:
+      labels: { app: luks-csi-node }
+    spec:
+      serviceAccountName: luks-csi-node
+      hostPID: false
+      securityContext:
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: luks-csi
+          image: "{{ .Values.image.repository }}@{{ .Values.image.digest }}"
+          args: ["-mode=node", "-endpoint=unix:///csi/csi.sock"]
+          env:
+            - { name: VAULT_ADDR, value: "{{ .Values.vault.addr }}" }
+            - { name: VAULT_CACERT, value: "/etc/vault/ca.pem" }
+            - { name: LOG_LEVEL, value: "{{ .Values.logLevel }}" }
+          securityContext:
+            privileged: true
+            capabilities: { add: ["IPC_LOCK"] }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits:   { cpu: 500m, memory: 256Mi }
+          volumeMounts:
+            - { name: socket-dir, mountPath: /csi }
+            - { name: kubelet-dir, mountPath: /var/lib/kubelet, mountPropagation: Bidirectional }
+            - { name: vault-ca, mountPath: /etc/vault, readOnly: true }
+        - name: node-driver-registrar
+          image: "{{ .Values.sidecars.registrar }}"
+          args:
+            - "--csi-address=/csi/csi.sock"
+            - "--kubelet-registration-path=/var/lib/kubelet/plugins/luks.csi.nfcs.io/csi.sock"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+            seccompProfile: { type: RuntimeDefault }
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits:   { cpu: 100m, memory: 64Mi }
+          volumeMounts:
+            - { name: socket-dir, mountPath: /csi }
+            - { name: registration-dir, mountPath: /registration }
+      volumes:
+        - { name: socket-dir, hostPath: { path: /var/lib/kubelet/plugins/luks.csi.nfcs.io, type: DirectoryOrCreate } }
+        - { name: registration-dir, hostPath: { path: /var/lib/kubelet/plugins_registry, type: Directory } }
+        - { name: kubelet-dir, hostPath: { path: /var/lib/kubelet, type: Directory } }
+        - { name: vault-ca, secret: { secretName: luks-csi-vault-ca } }

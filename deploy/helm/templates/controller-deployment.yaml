@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: luks-csi-controller
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: luks-csi-controller }
+  template:
+    metadata:
+      labels: { app: luks-csi-controller }
+    spec:
+      serviceAccountName: luks-csi-controller
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: luks-csi
+          image: "{{ .Values.image.repository }}@{{ .Values.image.digest }}"
+          args: ["-mode=controller", "-endpoint=unix:///csi/csi.sock"]
+          env:
+            - { name: VAULT_ADDR, value: "{{ .Values.vault.addr }}" }
+            - { name: VAULT_CACERT, value: "/etc/vault/ca.pem" }
+            - { name: LOG_LEVEL, value: "{{ .Values.logLevel }}" }
+          securityContext:
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+            seccompProfile: { type: RuntimeDefault }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits:   { cpu: 500m, memory: 256Mi }
+          volumeMounts:
+            - { name: socket-dir, mountPath: /csi }
+            - { name: vault-ca, mountPath: /etc/vault, readOnly: true }
+        - name: external-provisioner
+          image: "{{ .Values.sidecars.provisioner }}"
+          args: ["--csi-address=/csi/csi.sock", "--leader-election"]
+          securityContext:
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+            seccompProfile: { type: RuntimeDefault }
+          resources:
+            requests: { cpu: 20m, memory: 32Mi }
+            limits:   { cpu: 200m, memory: 128Mi }
+          volumeMounts:
+            - { name: socket-dir, mountPath: /csi }
+        - name: external-attacher
+          image: "{{ .Values.sidecars.attacher }}"
+          args: ["--csi-address=/csi/csi.sock", "--leader-election"]
+          securityContext:
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+            seccompProfile: { type: RuntimeDefault }
+          resources:
+            requests: { cpu: 20m, memory: 32Mi }
+            limits:   { cpu: 200m, memory: 128Mi }
+          volumeMounts:
+            - { name: socket-dir, mountPath: /csi }
+      volumes:
+        - { name: socket-dir, emptyDir: {} }
+        - { name: vault-ca, secret: { secretName: luks-csi-vault-ca } }

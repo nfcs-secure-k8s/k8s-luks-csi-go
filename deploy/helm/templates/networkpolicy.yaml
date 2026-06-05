@@ -1,0 +1,29 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: luks-csi-controller-egress
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels: { app: luks-csi-controller }
+  policyTypes: ["Egress"]
+  egress:
+    - to: [{ ipBlock: { cidr: "{{ .Values.vault.cidr }}" } }]
+      ports: [{ protocol: TCP, port: 8200 }]
+    - ports: [{ protocol: TCP, port: 443 }]
+    - ports: [{ protocol: UDP, port: 53 }, { protocol: TCP, port: 53 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: luks-csi-node-egress
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels: { app: luks-csi-node }
+  policyTypes: ["Egress"]
+  egress:
+    - to: [{ ipBlock: { cidr: "{{ .Values.vault.cidr }}" } }]
+      ports: [{ protocol: TCP, port: 8200 }]
+    - ports: [{ protocol: TCP, port: 443 }]
+    - ports: [{ protocol: UDP, port: 53 }, { protocol: TCP, port: 53 }]

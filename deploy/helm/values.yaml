@@ -1,0 +1,11 @@
+image:
+  repository: ghcr.io/nfcs/luks-csi
+  digest: "sha256:REPLACE_AT_RELEASE"
+logLevel: INFO
+vault:
+  addr: "https://vault.internal:8200"
+  cidr: "10.0.0.0/24"
+sidecars:
+  provisioner: "registry.k8s.io/sig-storage/csi-provisioner@sha256:REPLACE"
+  attacher:    "registry.k8s.io/sig-storage/csi-attacher@sha256:REPLACE"
+  registrar:   "registry.k8s.io/sig-storage/csi-node-driver-registrar@sha256:REPLACE"
