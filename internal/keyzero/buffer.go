@@ -26,11 +26,16 @@ func NewBuffer(n int) (*Buffer, error) {
 }
 
 // Bytes returns the underlying slice. Do not retain references past Zero.
-func (b *Buffer) Bytes() []byte { return b.data }
+func (b *Buffer) Bytes() []byte {
+	if b.zeroed {
+		panic("keyzero: Bytes called after Zero")
+	}
+	return b.data
+}
 
 // Zero wipes the buffer and unlocks its pages. Safe to call multiple times.
 func (b *Buffer) Zero() {
-	if b.zeroed {
+	if b == nil || b.zeroed {
 		return
 	}
 	for i := range b.data {

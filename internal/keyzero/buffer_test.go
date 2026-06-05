@@ -21,10 +21,11 @@ func TestZeroWipesContents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewBuffer: %v", err)
 	}
-	copy(b.Bytes(), []byte("secret!!"))
+	data := b.Bytes() // capture slice before Zero invalidates Bytes()
+	copy(data, []byte("secret!!"))
 	b.Zero()
-	if !bytes.Equal(b.Bytes(), make([]byte, 8)) {
-		t.Fatalf("buffer not zeroed: %x", b.Bytes())
+	if !bytes.Equal(data, make([]byte, 8)) {
+		t.Fatalf("buffer not zeroed: %x", data)
 	}
 }
 
