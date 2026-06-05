@@ -75,7 +75,12 @@ func (l *LUKS) MakeFS(ctx context.Context, name string) error {
 }
 
 // AddKey adds newKey as an additional keyslot, authenticating with oldKey.
+// NOTE: The second key (/dev/fd/4) requires ExecRunner to wire a second pipe;
+// this is deferred to Task 7 (rotation). The method signature is correct but
+// the real ExecRunner will not deliver newKey until Task 7 extends Run().
 func (l *LUKS) AddKey(ctx context.Context, device string, oldKey, newKey *keyzero.Buffer) error {
+	// device is a block device path resolved and validated by the device.Resolver
+	// layer before reaching this method — it is not raw user input.
 	_, err := l.run.Run(ctx, oldKey,
 		"luksAddKey", "--key-file="+KeyFDPath, device, "/dev/fd/4")
 	if err != nil {
@@ -86,6 +91,7 @@ func (l *LUKS) AddKey(ctx context.Context, device string, oldKey, newKey *keyzer
 
 // RemoveKey removes the keyslot matching the supplied key.
 func (l *LUKS) RemoveKey(ctx context.Context, device string, key *keyzero.Buffer) error {
+	// device is a block device path from device.Resolver — not raw user input.
 	if _, err := l.run.Run(ctx, key, "luksRemoveKey", "--key-file="+KeyFDPath, device); err != nil {
 		return fmt.Errorf("luks: removekey %s: %w", device, err)
 	}
@@ -93,12 +99,15 @@ func (l *LUKS) RemoveKey(ctx context.Context, device string, key *keyzero.Buffer
 }
 
 // IsLUKS reports whether device already holds a LUKS header.
+// isLuks exits 0 iff a LUKS header is present; error => no header.
 func (l *LUKS) IsLUKS(ctx context.Context, device string) (bool, error) {
 	_, err := l.run.Run(ctx, nil, "isLuks", device)
 	return err == nil, nil
 }
 
 // active reports whether the named mapper is currently active.
+// Error from Run is intentionally suppressed: inactive mapper => command fails
+// with non-zero exit, which is the expected "not active" signal.
 func (l *LUKS) active(ctx context.Context, name string) bool {
 	out, _ := l.run.Run(ctx, nil, "status", name)
 	return len(out) > 0
