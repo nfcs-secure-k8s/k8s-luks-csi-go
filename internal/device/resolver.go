@@ -53,8 +53,9 @@ func WaitForDevice(ctx context.Context, path string, timeout time.Duration) erro
 }
 
 func waitForDevice(ctx context.Context, path string, interval, timeout time.Duration, stat func(string) error) error {
-	deadline := time.NewTimer(timeout)
-	defer deadline.Stop()
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
 	if stat(path) == nil {
@@ -64,8 +65,6 @@ func waitForDevice(ctx context.Context, path string, interval, timeout time.Dura
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("device: wait for %s: %w", path, ctx.Err())
-		case <-deadline.C:
-			return fmt.Errorf("device: timed out waiting for %s", path)
 		case <-tick.C:
 			if stat(path) == nil {
 				return nil
