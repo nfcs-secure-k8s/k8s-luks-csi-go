@@ -56,6 +56,11 @@ func (c *Client) EnsureKey(ctx context.Context, institution, volume string) erro
 	if err != nil {
 		return fmt.Errorf("vault: generate key: %w", err)
 	}
+	defer func() {
+		for i := range key {
+			key[i] = 0
+		}
+	}()
 	if _, err := c.kv.Put(ctx, p, key); err != nil {
 		return fmt.Errorf("vault: ensure key: %w", err)
 	}
