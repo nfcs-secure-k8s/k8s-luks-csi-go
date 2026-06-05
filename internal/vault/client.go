@@ -96,5 +96,9 @@ func toBuffer(raw []byte) (*keyzero.Buffer, error) {
 		return nil, err
 	}
 	copy(buf.Bytes(), raw)
+	// Zero the source immediately — key material must not linger in unprotected heap memory.
+	for i := range raw {
+		raw[i] = 0
+	}
 	return buf, nil
 }

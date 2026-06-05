@@ -28,7 +28,7 @@ func (a *apiKV) GetVersion(ctx context.Context, path string, version int) ([]byt
 }
 
 func (a *apiKV) Put(ctx context.Context, path string, key []byte) (int, error) {
-	s, err := a.api.KVv2(mountPath).Put(ctx, path, map[string]interface{}{
+	s, err := a.api.KVv2(mountPath).Put(ctx, path, map[string]any{
 		"key": hex.EncodeToString(key),
 	})
 	if err != nil {
