@@ -35,6 +35,7 @@ func (r *ExecRunner) Run(ctx context.Context, key *keyzero.Buffer, args ...strin
 	cmd := exec.CommandContext(ctx, r.bin, args...)
 
 	var wg sync.WaitGroup
+	var writeErr error
 	if key != nil {
 		pr, pw, err := os.Pipe()
 		if err != nil {
@@ -48,7 +49,9 @@ func (r *ExecRunner) Run(ctx context.Context, key *keyzero.Buffer, args ...strin
 		go func() {
 			defer wg.Done()
 			defer pw.Close()
-			_, _ = pw.Write(key.Bytes())
+			if _, err := pw.Write(key.Bytes()); err != nil {
+				writeErr = err
+			}
 		}()
 	}
 
@@ -59,9 +62,11 @@ func (r *ExecRunner) Run(ctx context.Context, key *keyzero.Buffer, args ...strin
 	// Wait for the key-write goroutine to finish before returning, so the
 	// caller's keyzero.Buffer.Zero() cannot race with the pipe write.
 	wg.Wait()
+	if writeErr != nil {
+		return nil, fmt.Errorf("luks: key pipe write failed")
+	}
 	if runErr != nil {
-		return stdout.Bytes(), fmt.Errorf("luks: %s %v: %w: %s",
-			r.bin, args, runErr, stderr.String())
+		return stdout.Bytes(), fmt.Errorf("luks: %s: %w", r.bin, runErr)
 	}
 	return stdout.Bytes(), nil
 }
