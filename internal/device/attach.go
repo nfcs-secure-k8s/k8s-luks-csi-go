@@ -58,7 +58,7 @@ func (a *Attacher) Attach(ctx context.Context, req AttachRequest) error {
 		func(ctx context.Context) (bool, error) {
 			cur, err := a.cs.StorageV1().VolumeAttachments().Get(ctx, name, metav1.GetOptions{})
 			if err != nil {
-				return false, nil
+				return false, fmt.Errorf("device: get VolumeAttachment: %w", err)
 			}
 			if cur.Status.AttachError != nil {
 				return false, fmt.Errorf("device: attach error: %s", cur.Status.AttachError.Message)
