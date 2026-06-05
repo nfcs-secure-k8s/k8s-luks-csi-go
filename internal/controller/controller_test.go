@@ -81,6 +81,16 @@ func TestDeleteVolumeDeleteRemovesKey(t *testing.T) {
 	}
 }
 
+func TestDeleteVolumeUnknownPolicyReturnsInvalidArgument(t *testing.T) {
+	c := New(Deps{Vault: &fakeVault{}, Backing: &fakeBacking{}})
+	_, err := c.DeleteVolume(context.Background(), &csi.DeleteVolumeRequest{
+		VolumeId: "bristol/pvc-abc/Unknown",
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("code = %v, want InvalidArgument for unknown policy", status.Code(err))
+	}
+}
+
 // --- fakes ---
 
 type fakeVault struct {

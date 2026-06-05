@@ -89,13 +89,19 @@ func (s *Service) DeleteVolume(ctx context.Context, req *csi.DeleteVolumeRequest
 	if err != nil {
 		return nil, csierr.Wrap(codes.InvalidArgument, "delete volume", err)
 	}
-	if policy == "Delete" {
+	switch policy {
+	case "Delete":
 		if err := s.deps.Vault.DeleteKey(ctx, institution, volume); err != nil {
 			return nil, csierr.Wrap(codes.Internal, "delete key", err)
 		}
 		if err := s.deps.Backing.DeleteBackingPVC(ctx, backingName(institution, volume)); err != nil {
 			return nil, csierr.Wrap(codes.Internal, "delete backing pvc", err)
 		}
+	case "Retain":
+		// no-op: key and backing PVC are preserved (M-6 default)
+	default:
+		return nil, csierr.Wrap(codes.InvalidArgument, "delete volume",
+			fmt.Errorf("unknown deletionPolicy %q", policy))
 	}
 	return &csi.DeleteVolumeResponse{}, nil
 }
