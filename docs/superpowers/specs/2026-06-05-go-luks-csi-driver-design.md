@@ -245,12 +245,10 @@ GitHub Actions, all actions SHA-pinned, least-privilege `permissions` block:
 
 ---
 
-## 11. Open questions
+## 11. Deferred decisions (resolved)
 
-- **Node seccomp:** ship a scoped `Localhost` profile for the node DaemonSet in
-  v1, or start at `RuntimeDefault` and add it later?
-- **dm-integrity:** include the `--integrity` opt-in in v1 StorageClass
-  parameters or defer to a follow-up?
+- **Node seccomp:** use `RuntimeDefault` in v1. Scoped `Localhost` profile deferred.
+- **dm-integrity:** not in v1. `--integrity` opt-in deferred to a follow-up.
 - **Volume expansion / snapshots:** not in initial scope; flagged as operational
   follow-ups.
 
