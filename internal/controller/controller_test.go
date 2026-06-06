@@ -41,6 +41,9 @@ func TestCreateVolumeDefaultsToRetain(t *testing.T) {
 			"institution":        "bristol",
 			"backingStorageClass": "ceph-block",
 		},
+		VolumeCapabilities: []*csi.VolumeCapability{
+			{AccessMode: &csi.VolumeCapability_AccessMode{Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER}},
+		},
 	})
 	if err != nil {
 		t.Fatalf("CreateVolume: %v", err)

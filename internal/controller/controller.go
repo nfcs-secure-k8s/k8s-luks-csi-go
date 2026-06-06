@@ -46,6 +46,9 @@ func (s *Service) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest
 	if err := validate.VolumeName(name); err != nil {
 		return nil, csierr.Wrap(codes.InvalidArgument, "create volume", err)
 	}
+	if len(req.GetVolumeCapabilities()) == 0 {
+		return nil, csierr.Wrap(codes.InvalidArgument, "create volume", fmt.Errorf("missing volume capabilities"))
+	}
 	params := req.GetParameters()
 	institution := params["institution"]
 	if err := validate.Institution(institution); err != nil {
@@ -85,9 +88,14 @@ func (s *Service) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest
 }
 
 func (s *Service) DeleteVolume(ctx context.Context, req *csi.DeleteVolumeRequest) (*csi.DeleteVolumeResponse, error) {
+	if req.GetVolumeId() == "" {
+		return nil, csierr.Wrap(codes.InvalidArgument, "delete volume", fmt.Errorf("missing volume id"))
+	}
 	institution, volume, policy, err := parseVolumeID(req.GetVolumeId())
 	if err != nil {
-		return nil, csierr.Wrap(codes.InvalidArgument, "delete volume", err)
+		// CSI spec §6.3: return success for volumes that were not created by this plugin
+		// or that do not exist — DeleteVolume must be idempotent.
+		return &csi.DeleteVolumeResponse{}, nil
 	}
 	switch policy {
 	case "Delete":
@@ -109,7 +117,6 @@ func (s *Service) DeleteVolume(ctx context.Context, req *csi.DeleteVolumeRequest
 func (s *Service) ControllerGetCapabilities(_ context.Context, _ *csi.ControllerGetCapabilitiesRequest) (*csi.ControllerGetCapabilitiesResponse, error) {
 	caps := []csi.ControllerServiceCapability_RPC_Type{
 		csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
-		csi.ControllerServiceCapability_RPC_PUBLISH_UNPUBLISH_VOLUME,
 	}
 	var out []*csi.ControllerServiceCapability
 	for _, c := range caps {
@@ -120,6 +127,25 @@ func (s *Service) ControllerGetCapabilities(_ context.Context, _ *csi.Controller
 		})
 	}
 	return &csi.ControllerGetCapabilitiesResponse{Capabilities: out}, nil
+}
+
+func (s *Service) ValidateVolumeCapabilities(_ context.Context, req *csi.ValidateVolumeCapabilitiesRequest) (*csi.ValidateVolumeCapabilitiesResponse, error) {
+	if req.GetVolumeId() == "" {
+		return nil, csierr.Wrap(codes.InvalidArgument, "validate volume capabilities", fmt.Errorf("missing volume id"))
+	}
+	if len(req.GetVolumeCapabilities()) == 0 {
+		return nil, csierr.Wrap(codes.InvalidArgument, "validate volume capabilities", fmt.Errorf("missing volume capabilities"))
+	}
+	// Volumes created by this driver have format "institution/volume/policy".
+	// Any other ID format means the volume was not created here → NotFound.
+	if _, _, _, err := parseVolumeID(req.GetVolumeId()); err != nil {
+		return nil, csierr.Wrap(codes.NotFound, "validate volume capabilities", fmt.Errorf("volume %q not found", req.GetVolumeId()))
+	}
+	return &csi.ValidateVolumeCapabilitiesResponse{
+		Confirmed: &csi.ValidateVolumeCapabilitiesResponse_Confirmed{
+			VolumeCapabilities: req.GetVolumeCapabilities(),
+		},
+	}, nil
 }
 
 // parseVolumeID splits "<institution>/<volume>/<policy>".

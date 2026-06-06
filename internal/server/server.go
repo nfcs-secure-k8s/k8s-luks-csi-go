@@ -9,9 +9,7 @@ import (
 	csi "github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc"
 
-	"github.com/nfcs/k8s-luks-csi-go/internal/controller"
 	"github.com/nfcs/k8s-luks-csi-go/internal/identity"
-	"github.com/nfcs/k8s-luks-csi-go/internal/node"
 )
 
 type Mode string
@@ -31,18 +29,18 @@ type Config struct {
 type Server struct {
 	cfg        Config
 	grpc       *grpc.Server
-	identity   *identity.Service
-	controller *controller.Service
-	node       *node.Service
+	identity   csi.IdentityServer
+	controller csi.ControllerServer
+	node       csi.NodeServer
 }
 
 func New(cfg Config) *Server {
 	return &Server{cfg: cfg, grpc: grpc.NewServer()}
 }
 
-func (s *Server) WithIdentity(i *identity.Service) *Server     { s.identity = i; return s }
-func (s *Server) WithController(c *controller.Service) *Server { s.controller = c; return s }
-func (s *Server) WithNode(n *node.Service) *Server             { s.node = n; return s }
+func (s *Server) WithIdentity(i csi.IdentityServer) *Server     { s.identity = i; return s }
+func (s *Server) WithController(c csi.ControllerServer) *Server { s.controller = c; return s }
+func (s *Server) WithNode(n csi.NodeServer) *Server             { s.node = n; return s }
 
 func (s *Server) Run() error {
 	network, addr, err := parseEndpoint(s.cfg.Endpoint)
