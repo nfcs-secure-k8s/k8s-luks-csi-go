@@ -24,6 +24,8 @@ spec:
             - { name: LOG_LEVEL, value: "{{ .Values.logLevel }}" }
           securityContext:
             privileged: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities: { add: ["IPC_LOCK"] }
           resources:
             requests: { cpu: 50m, memory: 64Mi }

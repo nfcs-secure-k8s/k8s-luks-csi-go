@@ -1,0 +1,10 @@
+luks-csi deployed to namespace {{ .Release.Namespace }}.
+
+IMPORTANT: Before going to production, replace placeholder image digests in values.yaml:
+  image.digest          (currently: {{ .Values.image.digest }})
+  sidecars.provisioner  (currently: {{ .Values.sidecars.provisioner }})
+  sidecars.attacher     (currently: {{ .Values.sidecars.attacher }})
+  sidecars.registrar    (currently: {{ .Values.sidecars.registrar }})
+
+Vault address: {{ .Values.vault.addr }}
+Log level: {{ .Values.logLevel }}
