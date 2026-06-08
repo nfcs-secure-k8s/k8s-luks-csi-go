@@ -114,7 +114,8 @@ func (f *fakeLUKS) Open(_ context.Context, _, _ string, _ *keyzero.Buffer) error
 	f.opened = true
 	return nil
 }
-func (f *fakeLUKS) MakeFS(_ context.Context, _ string) error { f.madeFS = true; return nil }
+func (f *fakeLUKS) MakeFS(_ context.Context, _ string) error  { f.madeFS = true; return nil }
+func (f *fakeLUKS) Close(_ context.Context, _ string) error   { return nil }
 
 type fakeDevice struct{ path string }
 
@@ -124,4 +125,6 @@ func (f *fakeDevice) ResolveAndAttach(_ context.Context, _ map[string]string) (s
 
 type fakeMounter struct{}
 
-func (f *fakeMounter) Mount(_ context.Context, _, _ string) error { return nil }
+func (f *fakeMounter) Mount(_ context.Context, _, _ string) error     { return nil }
+func (f *fakeMounter) BindMount(_ context.Context, _, _ string) error { return nil }
+func (f *fakeMounter) Unmount(_ context.Context, _ string) error      { return nil }

@@ -44,6 +44,14 @@ func (genericByID) Resolve(_ context.Context, params map[string]string) (string,
 	return "/dev/disk/by-id/" + serial, nil
 }
 
+// NewDefaultRegistry returns a Registry pre-populated with the standard resolvers.
+func NewDefaultRegistry() *Registry {
+	r := NewRegistry()
+	r.Register(genericByID{})
+	r.Register(directDevice{})
+	return r
+}
+
 // WaitForDevice blocks until path exists or the context/deadline elapses.
 func WaitForDevice(ctx context.Context, path string, timeout time.Duration) error {
 	return waitForDevice(ctx, path, 200*time.Millisecond, timeout, func(p string) error {

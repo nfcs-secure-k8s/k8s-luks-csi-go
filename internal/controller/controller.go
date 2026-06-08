@@ -73,16 +73,23 @@ func (s *Service) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest
 	}
 
 	volID := fmt.Sprintf("%s/%s/%s", institution, name, policy)
+	volumeCtx := map[string]string{
+		"backingPV":      pvName,
+		"institution":    institution,
+		"luksType":       "luks2",
+		"deletionPolicy": policy,
+	}
+	// Pass through resolver hints (e.g. devicePath+backend=direct for loop-device tests).
+	for _, k := range []string{"devicePath", "backend"} {
+		if v := params[k]; v != "" {
+			volumeCtx[k] = v
+		}
+	}
 	return &csi.CreateVolumeResponse{
 		Volume: &csi.Volume{
 			VolumeId:      volID,
 			CapacityBytes: req.GetCapacityRange().GetRequiredBytes(),
-			VolumeContext: map[string]string{
-				"backingPV":      pvName,
-				"institution":    institution,
-				"luksType":       "luks2",
-				"deletionPolicy": policy,
-			},
+			VolumeContext: volumeCtx,
 		},
 	}, nil
 }

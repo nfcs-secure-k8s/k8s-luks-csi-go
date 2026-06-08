@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 
 	csi "github.com/container-storage-interface/spec/lib/go/csi"
@@ -31,6 +32,7 @@ type LUKSOps interface {
 	Format(ctx context.Context, device string, key *keyzero.Buffer) error
 	Open(ctx context.Context, device, name string, key *keyzero.Buffer) error
 	MakeFS(ctx context.Context, name string) error
+	Close(ctx context.Context, name string) error
 }
 
 // DeviceOps resolves+attaches the backing device.
@@ -38,9 +40,11 @@ type DeviceOps interface {
 	ResolveAndAttach(ctx context.Context, volumeContext map[string]string) (string, error)
 }
 
-// Mounter mounts the opened mapper at the staging path.
+// Mounter mounts/unmounts the opened mapper at the staging and target paths.
 type Mounter interface {
 	Mount(ctx context.Context, source, target string) error
+	BindMount(ctx context.Context, source, target string) error
+	Unmount(ctx context.Context, target string) error
 }
 
 // Deps are the node service's collaborators.
@@ -115,6 +119,66 @@ func (s *Service) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeR
 	return &csi.NodeStageVolumeResponse{}, nil
 }
 
+func (s *Service) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error) {
+	if req.GetVolumeId() == "" {
+		return nil, csierr.Wrap(codes.InvalidArgument, "node unstage", fmt.Errorf("missing volume id"))
+	}
+	if req.GetStagingTargetPath() == "" {
+		return nil, csierr.Wrap(codes.InvalidArgument, "node unstage", fmt.Errorf("missing staging target path"))
+	}
+	institution, volume, _, err := parseVolumeID(req.GetVolumeId())
+	if err != nil {
+		return nil, csierr.Wrap(codes.InvalidArgument, "node unstage", err)
+	}
+	mapper, err := mapperName(institution, volume)
+	if err != nil {
+		return nil, csierr.Wrap(codes.Internal, "node unstage", err)
+	}
+	if err := s.deps.Mount.Unmount(ctx, req.GetStagingTargetPath()); err != nil {
+		return nil, csierr.Wrap(codes.Internal, "unmount staging", err)
+	}
+	if err := s.deps.Luks.Close(ctx, mapper); err != nil {
+		return nil, csierr.Wrap(codes.Internal, "luks close", err)
+	}
+	slog.Info("unstaged volume", "institution", institution, "volume", volume, "mapper", mapper)
+	return &csi.NodeUnstageVolumeResponse{}, nil
+}
+
+func (s *Service) NodePublishVolume(ctx context.Context, req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
+	if req.GetVolumeId() == "" {
+		return nil, csierr.Wrap(codes.InvalidArgument, "node publish", fmt.Errorf("missing volume id"))
+	}
+	if req.GetTargetPath() == "" {
+		return nil, csierr.Wrap(codes.InvalidArgument, "node publish", fmt.Errorf("missing target path"))
+	}
+	if req.GetVolumeCapability() == nil {
+		return nil, csierr.Wrap(codes.InvalidArgument, "node publish", fmt.Errorf("missing volume capability"))
+	}
+	// CSI spec: SP MUST create the target path directory as part of NodePublishVolume.
+	if err := os.MkdirAll(req.GetTargetPath(), 0o750); err != nil {
+		return nil, csierr.Wrap(codes.Internal, "create target path", err)
+	}
+	// M-3: device-specific bind mount only; staging→target bind.
+	if err := s.deps.Mount.BindMount(ctx, req.GetStagingTargetPath(), req.GetTargetPath()); err != nil {
+		return nil, csierr.Wrap(codes.Internal, "bind mount", err)
+	}
+	return &csi.NodePublishVolumeResponse{}, nil
+}
+
+func (s *Service) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpublishVolumeRequest) (*csi.NodeUnpublishVolumeResponse, error) {
+	if req.GetVolumeId() == "" {
+		return nil, csierr.Wrap(codes.InvalidArgument, "node unpublish", fmt.Errorf("missing volume id"))
+	}
+	if req.GetTargetPath() == "" {
+		return nil, csierr.Wrap(codes.InvalidArgument, "node unpublish", fmt.Errorf("missing target path"))
+	}
+	if err := s.deps.Mount.Unmount(ctx, req.GetTargetPath()); err != nil {
+		return nil, csierr.Wrap(codes.Internal, "unmount target", err)
+	}
+	_ = os.Remove(req.GetTargetPath()) // best-effort; idempotent on ENOENT
+	return &csi.NodeUnpublishVolumeResponse{}, nil
+}
+
 func (s *Service) NodeGetCapabilities(_ context.Context, _ *csi.NodeGetCapabilitiesRequest) (*csi.NodeGetCapabilitiesResponse, error) {
 	return &csi.NodeGetCapabilitiesResponse{
 		Capabilities: []*csi.NodeServiceCapability{
@@ -123,6 +187,14 @@ func (s *Service) NodeGetCapabilities(_ context.Context, _ *csi.NodeGetCapabilit
 			}}},
 		},
 	}, nil
+}
+
+func (s *Service) NodeGetInfo(_ context.Context, _ *csi.NodeGetInfoRequest) (*csi.NodeGetInfoResponse, error) {
+	nodeID := os.Getenv("KUBE_NODE_NAME")
+	if nodeID == "" {
+		nodeID = "unknown"
+	}
+	return &csi.NodeGetInfoResponse{NodeId: nodeID}, nil
 }
 
 // mapperName derives the validated /dev/mapper target (H-5).
