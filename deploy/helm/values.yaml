@@ -7,7 +7,7 @@ image:
 logLevel: INFO
 vault:
   addr: "https://vault.internal:8200"
-  cidr: "10.0.0.0/24"
+  namespace: "vault"
 sidecars:
   provisioner: "registry.k8s.io/sig-storage/csi-provisioner:v5.2.0"
   attacher:    "registry.k8s.io/sig-storage/csi-attacher:v4.8.0"

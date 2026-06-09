@@ -8,10 +8,23 @@ spec:
     matchLabels: { app: luks-csi-controller }
   policyTypes: ["Egress"]
   egress:
-    - to: [{ ipBlock: { cidr: "{{ .Values.vault.cidr }}" } }]
-      ports: [{ protocol: TCP, port: 8200 }]
-    - ports: [{ protocol: TCP, port: 443 }]
-    - ports: [{ protocol: UDP, port: 53 }, { protocol: TCP, port: 53 }]
+    # Kubernetes API server. kube-router enforces NetworkPolicy post-DNAT, so the
+    # real API server port (6443 standard k8s, 6445 k3s-in-Lima) must be listed
+    # alongside the service port 443.
+    - ports:
+        - { protocol: TCP, port: 443 }
+        - { protocol: TCP, port: 6443 }
+        - { protocol: TCP, port: 6445 }
+    # Vault. namespaceSelector targets pod IPs directly so it works post-DNAT.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: "{{ .Values.vault.namespace }}"
+      ports:
+        - { protocol: TCP, port: 8200 }
+    - ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -23,7 +36,16 @@ spec:
     matchLabels: { app: luks-csi-node }
   policyTypes: ["Egress"]
   egress:
-    - to: [{ ipBlock: { cidr: "{{ .Values.vault.cidr }}" } }]
-      ports: [{ protocol: TCP, port: 8200 }]
-    - ports: [{ protocol: TCP, port: 443 }]
-    - ports: [{ protocol: UDP, port: 53 }, { protocol: TCP, port: 53 }]
+    - ports:
+        - { protocol: TCP, port: 443 }
+        - { protocol: TCP, port: 6443 }
+        - { protocol: TCP, port: 6445 }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: "{{ .Values.vault.namespace }}"
+      ports:
+        - { protocol: TCP, port: 8200 }
+    - ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
