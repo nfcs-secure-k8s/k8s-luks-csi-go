@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"log/slog"
 
+	"github.com/nfcs/k8s-luks-csi-go/internal/dbg"
 	"github.com/nfcs/k8s-luks-csi-go/internal/keyzero"
 )
 
@@ -49,11 +51,18 @@ func (c *Client) EnsureKey(ctx context.Context, institution, volume string) erro
 	if err != nil {
 		return err
 	}
+	if dbg.Enabled {
+		slog.Debug("vault: ensure key", "path", mountPath+"/data/"+p)
+	}
 	if _, _, err := c.kv.Get(ctx, p); err == nil {
-		return nil // already exists
+		if dbg.Enabled {
+			slog.Debug("vault: key already exists")
+		}
+		return nil
 	}
 	key, err := c.generate(32)
 	if err != nil {
+		slog.Warn("vault: ensure key failed", "op", "generate")
 		return fmt.Errorf("vault: generate key: %w", err)
 	}
 	defer func() {
@@ -62,7 +71,11 @@ func (c *Client) EnsureKey(ctx context.Context, institution, volume string) erro
 		}
 	}()
 	if _, err := c.kv.Put(ctx, p, key); err != nil {
+		slog.Warn("vault: ensure key failed", "op", "put")
 		return fmt.Errorf("vault: ensure key: %w", err)
+	}
+	if dbg.Enabled {
+		slog.Debug("vault: key created")
 	}
 	return nil
 }
@@ -74,7 +87,17 @@ func (c *Client) DeleteKey(ctx context.Context, institution, volume string) erro
 	if err != nil {
 		return err
 	}
-	return c.kv.DeleteAll(ctx, p)
+	if dbg.Enabled {
+		slog.Debug("vault: delete key", "path", mountPath+"/data/"+p)
+	}
+	if err := c.kv.DeleteAll(ctx, p); err != nil {
+		slog.Warn("vault: delete key failed")
+		return err
+	}
+	if dbg.Enabled {
+		slog.Debug("vault: key deleted")
+	}
+	return nil
 }
 
 // generate produces n random bytes; overridable in tests via Client.genKey.
