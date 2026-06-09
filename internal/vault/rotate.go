@@ -59,6 +59,8 @@ func (c *Client) EnsureKey(ctx context.Context, institution, volume string) erro
 			slog.Debug("vault: key already exists")
 		}
 		return nil
+	} else if dbg.Enabled {
+		slog.Debug("vault: ensure key get result", "err", err)
 	}
 	key, err := c.generate(32)
 	if err != nil {
@@ -71,6 +73,9 @@ func (c *Client) EnsureKey(ctx context.Context, institution, volume string) erro
 		}
 	}()
 	if _, err := c.kv.Put(ctx, p, key); err != nil {
+		if dbg.Enabled {
+			slog.Debug("vault: ensure key put error", "err", err)
+		}
 		slog.Warn("vault: ensure key failed", "op", "put")
 		return fmt.Errorf("vault: ensure key: %w", err)
 	}
