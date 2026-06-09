@@ -3,12 +3,14 @@ package controller
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	csi "github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
 
 	"github.com/nfcs/k8s-luks-csi-go/internal/csierr"
+	"github.com/nfcs/k8s-luks-csi-go/internal/dbg"
 	"github.com/nfcs/k8s-luks-csi-go/internal/validate"
 )
 
@@ -39,6 +41,7 @@ type Service struct {
 func New(deps Deps) *Service { return &Service{deps: deps} }
 
 func (s *Service) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
+	slog.Info("CreateVolume called")
 	name := req.GetName()
 	if name == "" {
 		return nil, csierr.Wrap(codes.InvalidArgument, "create volume", fmt.Errorf("missing name"))
@@ -60,15 +63,29 @@ func (s *Service) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest
 	}
 	policy := params["deletionPolicy"]
 	if policy == "" {
-		policy = "Retain" // M-6: default is Retain, not Delete
+		policy = "Retain"
+	}
+
+	if dbg.Enabled {
+		slog.Debug("CreateVolume params",
+			"institution", institution,
+			"backingStorageClass", sc,
+			"deletionPolicy", policy,
+		)
 	}
 
 	backing := backingName(institution, name)
+	if dbg.Enabled {
+		slog.Debug("CreateVolume backing name derived", "backing", backing)
+	}
+
 	pvName, err := s.deps.Backing.CreateBackingPVC(ctx, backing, sc)
 	if err != nil {
+		slog.Warn("CreateVolume failed", "op", "create backing pvc")
 		return nil, csierr.Wrap(codes.Internal, "create backing pvc", err)
 	}
 	if err := s.deps.Vault.EnsureKey(ctx, institution, name); err != nil {
+		slog.Warn("CreateVolume failed", "op", "ensure key")
 		return nil, csierr.Wrap(codes.Internal, "ensure key", err)
 	}
 
@@ -79,12 +96,16 @@ func (s *Service) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest
 		"luksType":       "luks2",
 		"deletionPolicy": policy,
 	}
-	// Pass through resolver hints (e.g. devicePath+backend=direct for loop-device tests).
 	for _, k := range []string{"devicePath", "backend"} {
 		if v := params[k]; v != "" {
 			volumeCtx[k] = v
 		}
 	}
+
+	if dbg.Enabled {
+		slog.Debug("CreateVolume ok", "volumeID", volID, "backingPV", pvName)
+	}
+	slog.Info("CreateVolume ok")
 	return &csi.CreateVolumeResponse{
 		Volume: &csi.Volume{
 			VolumeId:      volID,
