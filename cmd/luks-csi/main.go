@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/nfcs/k8s-luks-csi-go/internal/app"
+	"github.com/nfcs/k8s-luks-csi-go/internal/dbg"
 	"github.com/nfcs/k8s-luks-csi-go/internal/server"
 )
 
@@ -61,6 +62,9 @@ func main() {
 
 func setupLogging() {
 	level := slog.LevelInfo
+	if dbg.Enabled {
+		level = slog.LevelDebug
+	}
 	if v := os.Getenv("LOG_LEVEL"); v != "" {
 		_ = level.UnmarshalText([]byte(v))
 	}
