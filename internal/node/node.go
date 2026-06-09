@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc/codes"
 
 	"github.com/nfcs/k8s-luks-csi-go/internal/csierr"
+	"github.com/nfcs/k8s-luks-csi-go/internal/dbg"
 	"github.com/nfcs/k8s-luks-csi-go/internal/keyzero"
 	"github.com/nfcs/k8s-luks-csi-go/internal/validate"
 )
@@ -77,45 +78,69 @@ func (s *Service) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeR
 
 	device, err := s.deps.Device.ResolveAndAttach(ctx, req.GetVolumeContext())
 	if err != nil {
+		slog.Warn("node stage failed", "op", "resolve device")
 		return nil, csierr.Wrap(codes.Internal, "resolve device", err)
 	}
-
-	key, err := s.deps.Keys.KeyFor(ctx, Secret{RoleID: roleID, SecretID: secretID}, institution, volume)
-	if err != nil {
-		return nil, csierr.Wrap(codes.Internal, "fetch key", err)
-	}
-	defer key.Zero() // H-4/M-4: zeroed on every return path
 
 	mapper, err := mapperName(institution, volume)
 	if err != nil {
 		return nil, csierr.Wrap(codes.Internal, "node stage", err)
 	}
 
+	if dbg.Enabled {
+		slog.Debug("node stage: device resolved", "device", device, "mapper", mapper,
+			"target", req.GetStagingTargetPath())
+	}
+
+	key, err := s.deps.Keys.KeyFor(ctx, Secret{RoleID: roleID, SecretID: secretID}, institution, volume)
+	if err != nil {
+		slog.Warn("node stage failed", "op", "fetch key")
+		return nil, csierr.Wrap(codes.Internal, "fetch key", err)
+	}
+	defer key.Zero()
+
 	isLUKS, err := s.deps.Luks.IsLUKS(ctx, device)
 	if err != nil {
+		slog.Warn("node stage failed", "op", "probe luks")
 		return nil, csierr.Wrap(codes.Internal, "probe luks", err)
 	}
+
 	if !isLUKS {
+		if dbg.Enabled {
+			slog.Debug("node stage: new volume — format + open", "mapper", mapper)
+		}
 		if err := s.deps.Luks.Format(ctx, device, key); err != nil {
+			slog.Warn("node stage failed", "op", "format")
 			return nil, csierr.Wrap(codes.Internal, "format", err)
 		}
 		if err := s.deps.Luks.Open(ctx, device, mapper, key); err != nil {
+			slog.Warn("node stage failed", "op", "open after format")
 			return nil, csierr.Wrap(codes.Internal, "open", err)
 		}
 		if err := s.deps.Luks.MakeFS(ctx, mapper); err != nil {
+			slog.Warn("node stage failed", "op", "mkfs")
 			return nil, csierr.Wrap(codes.Internal, "mkfs", err)
 		}
 	} else {
+		if dbg.Enabled {
+			slog.Debug("node stage: existing volume — open only", "mapper", mapper)
+		}
 		if err := s.deps.Luks.Open(ctx, device, mapper, key); err != nil {
+			slog.Warn("node stage failed", "op", "open")
 			return nil, csierr.Wrap(codes.Internal, "open", err)
 		}
 	}
 
 	if err := s.deps.Mount.Mount(ctx, "/dev/mapper/"+mapper, req.GetStagingTargetPath()); err != nil {
+		slog.Warn("node stage failed", "op", "mount")
 		return nil, csierr.Wrap(codes.Internal, "mount", err)
 	}
-	// H-7: log institution and mapper name, never key material or key-file paths.
-	slog.Info("staged volume", "institution", institution, "volume", volume, "mapper", mapper)
+
+	if dbg.Enabled {
+		slog.Debug("node stage: ok", "device", device, "mapper", mapper,
+			"target", req.GetStagingTargetPath(), "new_volume", !isLUKS)
+	}
+	slog.Info("volume staged")
 	return &csi.NodeStageVolumeResponse{}, nil
 }
 
@@ -134,13 +159,21 @@ func (s *Service) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstageVol
 	if err != nil {
 		return nil, csierr.Wrap(codes.Internal, "node unstage", err)
 	}
+	if dbg.Enabled {
+		slog.Debug("node unstage", "mapper", mapper, "target", req.GetStagingTargetPath())
+	}
 	if err := s.deps.Mount.Unmount(ctx, req.GetStagingTargetPath()); err != nil {
+		slog.Warn("node unstage failed", "op", "unmount")
 		return nil, csierr.Wrap(codes.Internal, "unmount staging", err)
 	}
 	if err := s.deps.Luks.Close(ctx, mapper); err != nil {
+		slog.Warn("node unstage failed", "op", "luks close")
 		return nil, csierr.Wrap(codes.Internal, "luks close", err)
 	}
-	slog.Info("unstaged volume", "institution", institution, "volume", volume, "mapper", mapper)
+	if dbg.Enabled {
+		slog.Debug("node unstage: ok", "mapper", mapper)
+	}
+	slog.Info("volume unstaged")
 	return &csi.NodeUnstageVolumeResponse{}, nil
 }
 
