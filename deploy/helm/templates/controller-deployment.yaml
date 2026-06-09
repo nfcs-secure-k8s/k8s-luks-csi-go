@@ -17,7 +17,13 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: luks-csi
-          image: "{{ .Values.image.repository }}@{{ .Values.image.digest }}"
+          {{- if .Values.image.controllerRepository }}
+          image: "{{ .Values.image.controllerRepository }}{{ if .Values.image.controllerTag }}:{{ .Values.image.controllerTag }}{{ else }}@{{ .Values.image.digest }}{{ end }}"
+          imagePullPolicy: "{{ if .Values.image.controllerTag }}Never{{ else }}IfNotPresent{{ end }}"
+          {{- else }}
+          image: "{{ .Values.image.repository }}{{ if .Values.image.tag }}:{{ .Values.image.tag }}{{ else }}@{{ .Values.image.digest }}{{ end }}"
+          imagePullPolicy: "{{ if .Values.image.tag }}Never{{ else }}IfNotPresent{{ end }}"
+          {{- end }}
           args: ["-mode=controller", "-endpoint=unix:///csi/csi.sock"]
           env:
             - { name: VAULT_ADDR, value: "{{ .Values.vault.addr }}" }
@@ -40,6 +46,7 @@ spec:
           args: ["--csi-address=/csi/csi.sock", "--leader-election"]
           securityContext:
             runAsNonRoot: true
+            runAsUser: 65532
             readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false
             capabilities: { drop: ["ALL"] }
@@ -54,6 +61,7 @@ spec:
           args: ["--csi-address=/csi/csi.sock", "--leader-election"]
           securityContext:
             runAsNonRoot: true
+            runAsUser: 65532
             readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false
             capabilities: { drop: ["ALL"] }

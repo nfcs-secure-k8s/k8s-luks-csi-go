@@ -16,7 +16,8 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: luks-csi
-          image: "{{ .Values.image.repository }}@{{ .Values.image.digest }}"
+          image: "{{ .Values.image.repository }}{{ if .Values.image.tag }}:{{ .Values.image.tag }}{{ else }}@{{ .Values.image.digest }}{{ end }}"
+          imagePullPolicy: "{{ if .Values.image.tag }}Never{{ else }}IfNotPresent{{ end }}"
           args: ["-mode=node", "-endpoint=unix:///csi/csi.sock"]
           env:
             - { name: VAULT_ADDR, value: "{{ .Values.vault.addr }}" }
@@ -24,7 +25,6 @@ spec:
             - { name: LOG_LEVEL, value: "{{ .Values.logLevel }}" }
           securityContext:
             privileged: true
-            allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities: { add: ["IPC_LOCK"] }
           resources:
