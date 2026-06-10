@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	csi "github.com/container-storage-interface/spec/lib/go/csi"
@@ -76,6 +77,70 @@ func TestNodeStageOpensExistingLUKSWithoutFormat(t *testing.T) {
 	}
 }
 
+func TestNodeStageCallsEnsureStaged(t *testing.T) {
+	fs := &fakeStager{}
+	s := New(Deps{
+		Keys:   &fakeKeySource{},
+		Luks:   &fakeLUKS{isLUKS: true},
+		Device: &fakeDevice{path: "/dev/x"},
+		Mount:  &fakeMounter{},
+		Stager: fs,
+	})
+	_, err := s.NodeStageVolume(context.Background(), &csi.NodeStageVolumeRequest{
+		VolumeId:          "bristol/vol-1/Retain",
+		StagingTargetPath: "/stage",
+		VolumeContext:     map[string]string{"backingPVCName": "luks-backing-abc"},
+		Secrets:           map[string]string{"roleId": "r", "secretId": "s"},
+	})
+	if err != nil {
+		t.Fatalf("NodeStageVolume: %v", err)
+	}
+	if !fs.ensureCalled {
+		t.Fatal("EnsureStaged was not called")
+	}
+}
+
+func TestNodeUnstageCallsReleaseStaged(t *testing.T) {
+	fs := &fakeStager{}
+	s := New(Deps{
+		Keys:   &fakeKeySource{},
+		Luks:   &fakeLUKS{},
+		Device: &fakeDevice{path: "/dev/x"},
+		Mount:  &fakeMounter{},
+		Stager: fs,
+	})
+	_, err := s.NodeUnstageVolume(context.Background(), &csi.NodeUnstageVolumeRequest{
+		VolumeId:          "bristol/vol-1/Retain",
+		StagingTargetPath: "/stage",
+	})
+	if err != nil {
+		t.Fatalf("NodeUnstageVolume: %v", err)
+	}
+	if !fs.releaseCalled {
+		t.Fatal("ReleaseStaged was not called")
+	}
+}
+
+func TestNodeStageReturnsErrorWhenStagingFails(t *testing.T) {
+	fs := &fakeStager{err: fmt.Errorf("backing pvc not found")}
+	s := New(Deps{
+		Keys:   &fakeKeySource{},
+		Luks:   &fakeLUKS{},
+		Device: &fakeDevice{path: "/dev/x"},
+		Mount:  &fakeMounter{},
+		Stager: fs,
+	})
+	_, err := s.NodeStageVolume(context.Background(), &csi.NodeStageVolumeRequest{
+		VolumeId:          "bristol/vol-1/Retain",
+		StagingTargetPath: "/stage",
+		VolumeContext:     map[string]string{"backingPVCName": "luks-backing-abc"},
+		Secrets:           map[string]string{"roleId": "r", "secretId": "s"},
+	})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("code = %v, want Internal", status.Code(err))
+	}
+}
+
 func allZero(b []byte) bool {
 	for _, v := range b {
 		if v != 0 {
@@ -114,14 +179,32 @@ func (f *fakeLUKS) Open(_ context.Context, _, _ string, _ *keyzero.Buffer) error
 	f.opened = true
 	return nil
 }
-func (f *fakeLUKS) MakeFS(_ context.Context, _ string) error  { f.madeFS = true; return nil }
-func (f *fakeLUKS) Close(_ context.Context, _ string) error   { return nil }
+func (f *fakeLUKS) MakeFS(_ context.Context, _ string) error { f.madeFS = true; return nil }
+func (f *fakeLUKS) Close(_ context.Context, _ string) error  { return nil }
 
 type fakeDevice struct{ path string }
 
 func (f *fakeDevice) ResolveAndAttach(_ context.Context, _ map[string]string) (string, error) {
 	return f.path, nil
 }
+
+type fakeStager struct {
+	ensureCalled  bool
+	releaseCalled bool
+	err           error
+}
+
+func (f *fakeStager) EnsureStaged(_ context.Context, _ string, _ map[string]string) error {
+	f.ensureCalled = true
+	return f.err
+}
+
+func (f *fakeStager) ReleaseStaged(_ context.Context, _ string) error {
+	f.releaseCalled = true
+	return f.err
+}
+
+func (f *fakeStager) ReconcileOrphans(_ context.Context) error { return nil }
 
 type fakeMounter struct{}
 

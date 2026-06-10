@@ -48,12 +48,21 @@ type Mounter interface {
 	Unmount(ctx context.Context, target string) error
 }
 
+// Stager manages staging pods that trigger the backing CSI driver's
+// NodeStageVolume, making the backing block device visible on the host.
+type Stager interface {
+	EnsureStaged(ctx context.Context, volumeID string, volumeContext map[string]string) error
+	ReleaseStaged(ctx context.Context, volumeID string) error
+	ReconcileOrphans(ctx context.Context) error
+}
+
 // Deps are the node service's collaborators.
 type Deps struct {
 	Keys   KeySource
 	Luks   LUKSOps
 	Device DeviceOps
 	Mount  Mounter
+	Stager Stager // nil is valid for tests that don't exercise staging
 }
 
 // Service implements csi.NodeServer.
@@ -74,6 +83,13 @@ func (s *Service) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeR
 	if roleID == "" || secretID == "" {
 		return nil, csierr.Wrap(codes.InvalidArgument, "node stage",
 			fmt.Errorf("missing per-tenant vault credential in node-stage secrets"))
+	}
+
+	if s.deps.Stager != nil {
+		if err := s.deps.Stager.EnsureStaged(ctx, req.GetVolumeId(), req.GetVolumeContext()); err != nil {
+			slog.Warn("node stage failed", "op", "ensure staged")
+			return nil, csierr.Wrap(codes.Internal, "ensure staged", err)
+		}
 	}
 
 	device, err := s.deps.Device.ResolveAndAttach(ctx, req.GetVolumeContext())
@@ -182,6 +198,18 @@ func (s *Service) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstageVol
 		slog.Warn("node unstage failed", "op", "luks close")
 		return nil, csierr.Wrap(codes.Internal, "luks close", err)
 	}
+	// Release the staging pod only after the LUKS mapper is closed. The pod
+	// holds the backing block device mapped on the host; deleting it triggers
+	// the backing driver's unmap. Doing so while the dm-crypt mapper is still
+	// open would pull the device out from under an active crypt layer. If Close
+	// fails above we deliberately leave the pod in place and let kubelet retry
+	// NodeUnstageVolume — a stuck volume is preferable to an unsafe unmap.
+	if s.deps.Stager != nil {
+		if err := s.deps.Stager.ReleaseStaged(ctx, req.GetVolumeId()); err != nil {
+			slog.Warn("node unstage failed", "op", "release staged")
+			return nil, csierr.Wrap(codes.Internal, "release staged", err)
+		}
+	}
 	if dbg.Enabled {
 		slog.Debug("node unstage: ok", "mapper", mapper)
 	}
@@ -240,6 +268,15 @@ func (s *Service) NodeGetInfo(_ context.Context, _ *csi.NodeGetInfoRequest) (*cs
 		nodeID = "unknown"
 	}
 	return &csi.NodeGetInfoResponse{NodeId: nodeID}, nil
+}
+
+// Reconcile runs startup orphan reconciliation. Call once after the service
+// is wired, before serving requests.
+func (s *Service) Reconcile(ctx context.Context) error {
+	if s.deps.Stager == nil {
+		return nil
+	}
+	return s.deps.Stager.ReconcileOrphans(ctx)
 }
 
 // mapperName derives the validated /dev/mapper target (H-5).
