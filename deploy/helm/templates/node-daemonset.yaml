@@ -38,7 +38,7 @@ spec:
             - { name: socket-dir, mountPath: /csi }
             - { name: kubelet-dir, mountPath: /var/lib/kubelet, mountPropagation: Bidirectional }
             - { name: host-dev, mountPath: /dev }
-            - { name: run-dir, mountPath: /run }
+            - { name: host-run, mountPath: /run }
             - { name: vault-ca, mountPath: /etc/vault, readOnly: true }
         - name: node-driver-registrar
           image: "{{ .Values.sidecars.registrar }}"
@@ -60,5 +60,5 @@ spec:
         - { name: registration-dir, hostPath: { path: /var/lib/kubelet/plugins_registry, type: Directory } }
         - { name: kubelet-dir, hostPath: { path: /var/lib/kubelet, type: Directory } }
         - { name: host-dev, hostPath: { path: /dev } }
-        - { name: run-dir, emptyDir: { medium: Memory } }
+        - { name: host-run, hostPath: { path: /run } }
         - { name: vault-ca, secret: { secretName: luks-csi-vault-ca } }
