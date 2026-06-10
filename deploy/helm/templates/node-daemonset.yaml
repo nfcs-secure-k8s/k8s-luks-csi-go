@@ -32,8 +32,8 @@ spec:
             readOnlyRootFilesystem: true
             capabilities: { add: ["IPC_LOCK"] }
           resources:
-            requests: { cpu: 50m, memory: 64Mi }
-            limits:   { cpu: 500m, memory: 256Mi }
+            requests: { cpu: 100m, memory: 128Mi }
+            limits:   { cpu: 2000m, memory: 512Mi }
           volumeMounts:
             - { name: socket-dir, mountPath: /csi }
             - { name: kubelet-dir, mountPath: /var/lib/kubelet, mountPropagation: Bidirectional }

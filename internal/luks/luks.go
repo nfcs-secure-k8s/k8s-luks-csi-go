@@ -10,22 +10,29 @@ import (
 
 // LUKS wraps a Runner with idempotent cryptsetup/mkfs operations.
 type LUKS struct {
-	run  Runner
-	mkfs Runner
+	run   Runner
+	mkfs  Runner
+	blkid Runner
 }
 
 // New returns a LUKS using the given cryptsetup Runner. MakeFS defaults to mkfs.ext4.
 func New(cryptsetup Runner) *LUKS {
-	return &LUKS{run: cryptsetup, mkfs: NewExecRunner("mkfs.ext4")}
+	return &LUKS{run: cryptsetup, mkfs: NewExecRunner("mkfs.ext4"), blkid: NewExecRunner("blkid")}
 }
 
 // WithMkfs overrides the filesystem-creation Runner (for tests/other fs).
 func (l *LUKS) WithMkfs(r Runner) *LUKS { l.mkfs = r; return l }
 
-// Format initialises a LUKS2 container with argon2id. luks1 is never used (M-2).
+// WithBlkid overrides the blkid Runner (for tests).
+func (l *LUKS) WithBlkid(r Runner) *LUKS { l.blkid = r; return l }
+
+// Format initialises a LUKS2 container with argon2id.
+// --pbkdf-force-iterations 4 skips the expensive benchmark: the key is always
+// a 32-byte random Vault secret so no KDF stretching is needed (M-2).
 func (l *LUKS) Format(ctx context.Context, device string, key *keyzero.Buffer) error {
 	_, err := l.run.Run(ctx, key,
 		"luksFormat", "--type", "luks2", "--pbkdf", "argon2id",
+		"--pbkdf-force-iterations", "4",
 		"--batch-mode", "--key-file="+KeyFDPath, device)
 	if err != nil {
 		return fmt.Errorf("luks: format %s: %w", device, err)
@@ -63,10 +70,16 @@ func (l *LUKS) Close(ctx context.Context, name string) error {
 	return nil
 }
 
-// MakeFS creates a filesystem on the opened mapper device.
+// MakeFS creates a filesystem on the opened mapper device. Idempotent: if blkid
+// detects an existing filesystem type the call is a no-op.
 func (l *LUKS) MakeFS(ctx context.Context, name string) error {
 	if err := validate.MapperName(name); err != nil {
 		return err
+	}
+	// blkid -s TYPE exits 0 and prints the type when a filesystem is present;
+	// exits 2 (no match) when the device is blank.
+	if _, err := l.blkid.Run(ctx, nil, "-s", "TYPE", "/dev/mapper/"+name); err == nil {
+		return nil
 	}
 	if _, err := l.mkfs.Run(ctx, nil, "/dev/mapper/"+name); err != nil {
 		return fmt.Errorf("luks: mkfs %s: %w", name, err)
@@ -106,9 +119,9 @@ func (l *LUKS) IsLUKS(ctx context.Context, device string) (bool, error) {
 }
 
 // active reports whether the named mapper is currently active.
-// Error from Run is intentionally suppressed: inactive mapper => command fails
-// with non-zero exit, which is the expected "not active" signal.
+// cryptsetup status exits 0 only when the device is active; any non-zero exit
+// (including the "is inactive." case with exit 4) means not active.
 func (l *LUKS) active(ctx context.Context, name string) bool {
-	out, _ := l.run.Run(ctx, nil, "status", name)
-	return len(out) > 0
+	_, err := l.run.Run(ctx, nil, "status", name)
+	return err == nil
 }

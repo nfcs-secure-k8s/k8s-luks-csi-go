@@ -66,7 +66,7 @@ func (r *ExecRunner) Run(ctx context.Context, key *keyzero.Buffer, args ...strin
 		return nil, fmt.Errorf("luks: key pipe write failed")
 	}
 	if runErr != nil {
-		return stdout.Bytes(), fmt.Errorf("luks: %s: %w", r.bin, runErr)
+		return stdout.Bytes(), fmt.Errorf("luks: %s: %w: %s", r.bin, runErr, stderr.Bytes())
 	}
 	return stdout.Bytes(), nil
 }

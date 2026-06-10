@@ -117,10 +117,6 @@ func (s *Service) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeR
 			slog.Warn("node stage failed", "op", "open after format")
 			return nil, csierr.Wrap(codes.Internal, "open", err)
 		}
-		if err := s.deps.Luks.MakeFS(ctx, mapper); err != nil {
-			slog.Warn("node stage failed", "op", "mkfs")
-			return nil, csierr.Wrap(codes.Internal, "mkfs", err)
-		}
 	} else {
 		if dbg.Enabled {
 			slog.Debug("node stage: existing volume — open only", "mapper", mapper)
@@ -131,7 +127,20 @@ func (s *Service) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeR
 		}
 	}
 
+	// MakeFS is idempotent (skips if filesystem already present). Runs in both
+	// branches to handle volumes that were formatted but not yet mkfs'd.
+	if err := s.deps.Luks.MakeFS(ctx, mapper); err != nil {
+		if dbg.Enabled {
+			slog.Debug("node stage mkfs error", "err", err)
+		}
+		slog.Warn("node stage failed", "op", "mkfs")
+		return nil, csierr.Wrap(codes.Internal, "mkfs", err)
+	}
+
 	if err := s.deps.Mount.Mount(ctx, "/dev/mapper/"+mapper, req.GetStagingTargetPath()); err != nil {
+		if dbg.Enabled {
+			slog.Debug("node stage mount error", "err", err)
+		}
 		slog.Warn("node stage failed", "op", "mount")
 		return nil, csierr.Wrap(codes.Internal, "mount", err)
 	}
