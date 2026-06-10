@@ -142,7 +142,7 @@ func TestEnsureStagedAnnotatesVolumeHash(t *testing.T) {
 	}
 }
 
-func TestEnsureStagedSetsOwnerReference(t *testing.T) {
+func TestEnsureStagedHasNoOwnerReference(t *testing.T) {
 	cs := fake.NewSimpleClientset()
 	fakeNode(cs, nil)
 	pvc := fakePVC(cs, "luks-backing-abc123")
@@ -153,12 +153,12 @@ func TestEnsureStagedSetsOwnerReference(t *testing.T) {
 	})
 
 	pods, _ := cs.CoreV1().Pods(testStagingNS).List(context.Background(), metav1.ListOptions{})
-	refs := pods.Items[0].OwnerReferences
-	if len(refs) == 0 {
-		t.Fatal("ownerReference missing")
-	}
-	if refs[0].Kind != "PersistentVolumeClaim" || refs[0].UID != pvc.UID {
-		t.Fatalf("ownerRef = {kind:%s uid:%s}, want {PersistentVolumeClaim %s}", refs[0].Kind, refs[0].UID, pvc.UID)
+	// The staging pod lives in StagingNS while the backing PVC lives in
+	// BackingNS. Cross-namespace owner references are invalid (GC resolves an
+	// owner within the dependent's own namespace), so we set none. Cleanup
+	// relies on ReleaseStaged + ReconcileOrphans instead.
+	if len(pods.Items[0].OwnerReferences) != 0 {
+		t.Fatalf("expected no owner references, got %v", pods.Items[0].OwnerReferences)
 	}
 }
 
@@ -202,6 +202,42 @@ func TestEnsureStagedDeletesStaleFailedPod(t *testing.T) {
 	}
 }
 
+func TestEnsureStagedRecoversFromPendingPod(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+	fakeNode(cs, nil)
+	pvc := fakePVC(cs, "luks-backing-abc123")
+	podName := "luks-stage-" + sha256hex16("bristol/vol-1/Retain")
+	_ = cs.Tracker().Add(&corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: podName, Namespace: testStagingNS},
+		Status:     corev1.PodStatus{Phase: corev1.PodPending},
+	})
+	// First Get (existence check) sees Pending -> fall through; Create returns
+	// AlreadyExists (silenced); waitRunning's Get must then see Running.
+	gets := 0
+	cs.PrependReactor("get", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		gets++
+		phase := corev1.PodPending
+		if gets > 1 {
+			phase = corev1.PodRunning
+		}
+		return true, &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: podName, Namespace: testStagingNS},
+			Status:     corev1.PodStatus{Phase: phase},
+		}, nil
+	})
+
+	if err := newManager(cs).EnsureStaged(context.Background(), "bristol/vol-1/Retain", map[string]string{
+		"backingPVCName": pvc.Name,
+	}); err != nil {
+		t.Fatalf("EnsureStaged from pending: %v", err)
+	}
+
+	pods, _ := cs.CoreV1().Pods(testStagingNS).List(context.Background(), metav1.ListOptions{})
+	if len(pods.Items) != 1 {
+		t.Fatalf("expected 1 pod, got %d", len(pods.Items))
+	}
+}
+
 func TestReleaseStagedDeletesPod(t *testing.T) {
 	cs := fake.NewSimpleClientset()
 	podName := "luks-stage-" + sha256hex16("bristol/vol-1/Retain")
@@ -227,15 +263,25 @@ func TestReleaseStagedIdempotent(t *testing.T) {
 func TestReconcileOrphansDeletesTerminalPods(t *testing.T) {
 	cs := fake.NewSimpleClientset()
 	labels := map[string]string{"app.kubernetes.io/managed-by": "luks-csi-driver"}
+	// Terminal pods on this node should be deleted.
 	for _, phase := range []corev1.PodPhase{corev1.PodFailed, corev1.PodSucceeded} {
 		_ = cs.Tracker().Add(&corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{Name: "pod-" + string(phase), Namespace: testStagingNS, Labels: labels},
+			Spec:       corev1.PodSpec{NodeName: testNode},
 			Status:     corev1.PodStatus{Phase: phase},
 		})
 	}
+	// Running pod on this node survives.
 	_ = cs.Tracker().Add(&corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "pod-running", Namespace: testStagingNS, Labels: labels},
+		Spec:       corev1.PodSpec{NodeName: testNode},
 		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+	})
+	// Terminal pod on another node survives (belongs to a different Manager).
+	_ = cs.Tracker().Add(&corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "pod-other-node", Namespace: testStagingNS, Labels: labels},
+		Spec:       corev1.PodSpec{NodeName: "other-node"},
+		Status:     corev1.PodStatus{Phase: corev1.PodFailed},
 	})
 
 	if err := newManager(cs).ReconcileOrphans(context.Background()); err != nil {
@@ -243,7 +289,11 @@ func TestReconcileOrphansDeletesTerminalPods(t *testing.T) {
 	}
 
 	pods, _ := cs.CoreV1().Pods(testStagingNS).List(context.Background(), metav1.ListOptions{})
-	if len(pods.Items) != 1 || pods.Items[0].Name != "pod-running" {
-		t.Fatalf("expected only pod-running to survive, got %v", pods.Items)
+	survivors := map[string]bool{}
+	for _, p := range pods.Items {
+		survivors[p.Name] = true
+	}
+	if len(survivors) != 2 || !survivors["pod-running"] || !survivors["pod-other-node"] {
+		t.Fatalf("expected pod-running and pod-other-node to survive, got %v", pods.Items)
 	}
 }

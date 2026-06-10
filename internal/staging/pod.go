@@ -15,7 +15,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 )
@@ -72,6 +71,12 @@ func (m *Manager) EnsureStaged(ctx context.Context, volumeID string, vc map[stri
 			if err := m.cs.CoreV1().Pods(m.cfg.StagingNS).Delete(ctx, podName, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 				return fmt.Errorf("staging: delete stale pod: %w", err)
 			}
+			// The deleted pod can linger (DeletionTimestamp set) while terminating.
+			// Wait for it to be fully gone before Create, otherwise Create returns
+			// AlreadyExists and waitRunning reads the still-terminating Failed pod.
+			if err := m.waitDeleted(ctx, podName); err != nil {
+				return err
+			}
 		}
 		// Pending/Unknown — fall through to Create (idempotent) then wait.
 	} else if !apierrors.IsNotFound(err) {
@@ -88,12 +93,13 @@ func (m *Manager) EnsureStaged(ctx context.Context, volumeID string, vc map[stri
 		return fmt.Errorf("staging: get node: %w", err)
 	}
 
-	pvc, err := m.cs.CoreV1().PersistentVolumeClaims(m.cfg.BackingNS).Get(ctx, backingPVC, metav1.GetOptions{})
-	if err != nil {
+	// Existence pre-check: fail fast if the backing PVC is absent rather than
+	// letting the staging pod hang Pending until the staging timeout.
+	if _, err := m.cs.CoreV1().PersistentVolumeClaims(m.cfg.BackingNS).Get(ctx, backingPVC, metav1.GetOptions{}); err != nil {
 		return fmt.Errorf("staging: get backing pvc: %w", err)
 	}
 
-	pod := buildPod(podName, m.cfg.StagingNS, backingPVC, m.cfg.NodeName, m.cfg.PauseImage, volumeID, node.Spec.Taints, pvc.UID)
+	pod := buildPod(podName, m.cfg.StagingNS, backingPVC, m.cfg.NodeName, m.cfg.PauseImage, volumeID, node.Spec.Taints)
 	if _, err := m.cs.CoreV1().Pods(m.cfg.StagingNS).Create(ctx, pod, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("staging: create pod: %w", err)
 	}
@@ -120,6 +126,11 @@ func (m *Manager) ReconcileOrphans(ctx context.Context) error {
 		return fmt.Errorf("staging: reconcile: list pods: %w", err)
 	}
 	for _, pod := range pods.Items {
+		// DaemonSet: one Manager per node sharing StagingNS. Only reconcile pods
+		// scheduled to this node so we don't delete other nodes' staging pods.
+		if pod.Spec.NodeName != m.cfg.NodeName {
+			continue
+		}
 		if pod.Status.Phase == corev1.PodFailed || pod.Status.Phase == corev1.PodSucceeded {
 			if err := m.cs.CoreV1().Pods(m.cfg.StagingNS).Delete(ctx, pod.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 				slog.Warn("staging: reconcile: could not delete orphan", "pod", pod.Name, "err", err)
@@ -143,14 +154,36 @@ func (m *Manager) waitRunning(ctx context.Context, podName string) error {
 			case corev1.PodRunning:
 				return true, nil
 			case corev1.PodFailed, corev1.PodSucceeded:
-				return false, fmt.Errorf("staging: pod %q reached terminal phase %s unexpectedly", podName, pod.Status.Phase)
+				detail := ""
+				for _, cs := range pod.Status.ContainerStatuses {
+					if t := cs.State.Terminated; t != nil {
+						detail = fmt.Sprintf(" (%s: %s)", t.Reason, t.Message)
+						break
+					}
+				}
+				return false, fmt.Errorf("staging: pod %q reached terminal phase %s unexpectedly%s", podName, pod.Status.Phase, detail)
 			}
 			return false, nil
 		})
 }
 
+// waitDeleted polls until the named pod no longer exists.
+func (m *Manager) waitDeleted(ctx context.Context, podName string) error {
+	return wait.PollUntilContextTimeout(ctx, pollInterval, m.cfg.Timeout, true,
+		func(ctx context.Context) (bool, error) {
+			_, err := m.cs.CoreV1().Pods(m.cfg.StagingNS).Get(ctx, podName, metav1.GetOptions{})
+			if apierrors.IsNotFound(err) {
+				return true, nil
+			}
+			if err != nil {
+				return false, fmt.Errorf("staging: get pod during delete-wait: %w", err)
+			}
+			return false, nil // still terminating
+		})
+}
+
 // buildPod constructs the staging pod spec.
-func buildPod(podName, stagingNS, backingPVC, nodeName, pauseImage, volumeID string, taints []corev1.Taint, pvcUID types.UID) *corev1.Pod {
+func buildPod(podName, stagingNS, backingPVC, nodeName, pauseImage, volumeID string, taints []corev1.Taint) *corev1.Pod {
 	tolerations := make([]corev1.Toleration, 0, len(taints))
 	for _, t := range taints {
 		tolerations = append(tolerations, corev1.Toleration{
@@ -161,7 +194,6 @@ func buildPod(podName, stagingNS, backingPVC, nodeName, pauseImage, volumeID str
 		})
 	}
 	falseVal := false
-	trueVal := true
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      podName,
@@ -173,13 +205,6 @@ func buildPod(podName, stagingNS, backingPVC, nodeName, pauseImage, volumeID str
 			Annotations: map[string]string{
 				volumeHashAnnot: sha256hex16(volumeID),
 			},
-			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion:         "v1",
-				Kind:               "PersistentVolumeClaim",
-				Name:               backingPVC,
-				UID:                pvcUID,
-				BlockOwnerDeletion: &trueVal,
-			}},
 		},
 		Spec: corev1.PodSpec{
 			NodeName:                     nodeName,
