@@ -13,6 +13,7 @@ import (
 	"github.com/nfcs/k8s-luks-csi-go/internal/device"
 	"github.com/nfcs/k8s-luks-csi-go/internal/luks"
 	"github.com/nfcs/k8s-luks-csi-go/internal/node"
+	"github.com/nfcs/k8s-luks-csi-go/internal/staging"
 	"github.com/nfcs/k8s-luks-csi-go/internal/vault"
 )
 
@@ -21,6 +22,8 @@ type Config struct {
 	VaultAddr        string
 	VaultCABundle    string
 	BackingNamespace string // namespace for backing PVCs (default: luks-csi-backing)
+	StagingNamespace string // namespace for staging pods (default: luks-csi-staging)
+	NodeName         string // Kubernetes node name (default: KUBE_NODE_NAME env var)
 }
 
 // BuildController wires the Controller service. Fails fast if the Vault
@@ -60,15 +63,37 @@ func BuildNode(cfg Config) (*node.Service, error) {
 	if err != nil {
 		return nil, fmt.Errorf("app: build k8s clientset: %w", err)
 	}
+
+	backingNS := cfg.BackingNamespace
+	if backingNS == "" {
+		backingNS = "luks-csi-backing"
+	}
+	stagingNS := cfg.StagingNamespace
+	if stagingNS == "" {
+		stagingNS = "luks-csi-staging"
+	}
+	nodeName := cfg.NodeName
+	if nodeName == "" {
+		nodeName = os.Getenv("KUBE_NODE_NAME")
+	}
+
+	stagingMgr := staging.New(cs, staging.Config{
+		NodeName:  nodeName,
+		StagingNS: stagingNS,
+		BackingNS: backingNS,
+	})
+
 	reg := device.NewDefaultRegistry()
-	reg.Register(device.NewLonghornResolver(cs, ""))
-	reg.Register(device.NewCephResolver(cs, ""))
-	reg.Register(device.NewCinderResolver(cs, ""))
+	reg.Register(device.NewLonghornResolver())
+	reg.Register(device.NewCephResolver(cs))
+	reg.Register(device.NewCinderResolver())
+
 	return node.New(node.Deps{
 		Keys:   &nodeKeySource{vault: vc},
 		Luks:   luks.New(luks.NewExecRunner("cryptsetup")),
 		Device: &deviceAdapter{reg: reg},
 		Mount:  &execMounter{},
+		Stager: stagingMgr,
 	}), nil
 }
 

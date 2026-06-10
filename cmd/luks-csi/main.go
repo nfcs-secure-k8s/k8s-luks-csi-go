@@ -2,9 +2,11 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/nfcs/k8s-luks-csi-go/internal/app"
 	"github.com/nfcs/k8s-luks-csi-go/internal/dbg"
@@ -26,6 +28,7 @@ func main() {
 		VaultAddr:        os.Getenv("VAULT_ADDR"),
 		VaultCABundle:    os.Getenv("VAULT_CACERT"),
 		BackingNamespace: envOrDefault("LUKS_CSI_BACKING_NS", "luks-csi-backing"),
+		StagingNamespace: envOrDefault("LUKS_CSI_STAGING_NS", "luks-csi-staging"),
 	}
 
 	m := server.Mode(*mode)
@@ -51,6 +54,14 @@ func main() {
 			os.Exit(1)
 		}
 		srv.WithNode(nodeSvc)
+		// Reconcile stale staging pods left by a previous run.
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := nodeSvc.Reconcile(ctx); err != nil {
+				slog.Warn("startup staging reconciliation incomplete", "err", err)
+			}
+		}()
 	}
 
 	slog.Info("starting luks-csi", "mode", *mode, "endpoint", *endpoint, "version", version)
