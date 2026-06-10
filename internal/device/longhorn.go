@@ -55,7 +55,7 @@ func newBlockAttachBase(cs kubernetes.Interface, nodeName string) blockAttachBas
 	return blockAttachBase{nodeName: nodeName, att: NewAttacher(cs)}
 }
 
-func (b *blockAttachBase) attachPV(ctx context.Context, pvName, csiDriver string) error {
+func (b *blockAttachBase) attachPV(ctx context.Context, pvName, csiDriver string) (map[string]string, error) {
 	return b.att.Attach(ctx, AttachRequest{
 		PVName:   pvName,
 		NodeName: b.nodeName,
@@ -81,7 +81,7 @@ func (l *longhornDevice) Resolve(ctx context.Context, params map[string]string) 
 	if err := validatePVName(pvName); err != nil {
 		return "", err
 	}
-	if err := l.attachPV(ctx, pvName, "driver.longhorn.io"); err != nil {
+	if _, err := l.attachPV(ctx, pvName, "driver.longhorn.io"); err != nil {
 		return "", fmt.Errorf("device: longhorn: %w", err)
 	}
 	path := filepath.Clean("/dev/longhorn/" + pvName)

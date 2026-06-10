@@ -11,17 +11,6 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 )
 
-func fakeAttachedCS() *fake.Clientset {
-	cs := fake.NewSimpleClientset()
-	cs.PrependReactor("create", "volumeattachments",
-		func(a k8stesting.Action) (bool, runtime.Object, error) {
-			va := a.(k8stesting.CreateAction).GetObject().(*storagev1.VolumeAttachment)
-			va.Status.Attached = true
-			return false, va, nil
-		})
-	return cs
-}
-
 func TestLonghornResolverHappyPath(t *testing.T) {
 	r := NewLonghornResolver(fakeAttachedCS(), "node-1")
 	path, err := r.Resolve(context.Background(), map[string]string{

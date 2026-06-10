@@ -39,8 +39,11 @@ func vaName(pv, node string) string {
 }
 
 // Attach creates the VolumeAttachment (idempotently) and waits until
-// Status.Attached is true (H-3: no node pod-create needed).
-func (a *Attacher) Attach(ctx context.Context, req AttachRequest) error {
+// Status.Attached is true (H-3: no node pod-create needed). It returns the
+// Status.AttachmentMetadata so attach-based resolvers (Ceph, Cinder) can read
+// the device path populated by the downstream CSI driver's
+// ControllerPublishVolumeResponse.PublishContext.
+func (a *Attacher) Attach(ctx context.Context, req AttachRequest) (map[string]string, error) {
 	name := vaName(req.PVName, req.NodeName)
 	va := &storagev1.VolumeAttachment{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
@@ -52,9 +55,10 @@ func (a *Attacher) Attach(ctx context.Context, req AttachRequest) error {
 	}
 	_, err := a.cs.StorageV1().VolumeAttachments().Create(ctx, va, metav1.CreateOptions{})
 	if err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("device: create VolumeAttachment: %w", err)
+		return nil, fmt.Errorf("device: create VolumeAttachment: %w", err)
 	}
-	return wait.PollUntilContextTimeout(ctx, a.poll, a.wait, true,
+	var meta map[string]string
+	err = wait.PollUntilContextTimeout(ctx, a.poll, a.wait, true,
 		func(ctx context.Context) (bool, error) {
 			cur, err := a.cs.StorageV1().VolumeAttachments().Get(ctx, name, metav1.GetOptions{})
 			if err != nil {
@@ -63,8 +67,13 @@ func (a *Attacher) Attach(ctx context.Context, req AttachRequest) error {
 			if cur.Status.AttachError != nil {
 				return false, fmt.Errorf("device: attach error: %s", cur.Status.AttachError.Message)
 			}
-			return cur.Status.Attached, nil
+			if cur.Status.Attached {
+				meta = cur.Status.AttachmentMetadata
+				return true, nil
+			}
+			return false, nil
 		})
+	return meta, err
 }
 
 // Detach deletes the VolumeAttachment. Idempotent: NotFound is success.

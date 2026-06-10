@@ -62,6 +62,8 @@ func BuildNode(cfg Config) (*node.Service, error) {
 	}
 	reg := device.NewDefaultRegistry()
 	reg.Register(device.NewLonghornResolver(cs, ""))
+	reg.Register(device.NewCephResolver(cs, ""))
+	reg.Register(device.NewCinderResolver(cs, ""))
 	return node.New(node.Deps{
 		Keys:   &nodeKeySource{vault: vc},
 		Luks:   luks.New(luks.NewExecRunner("cryptsetup")),

@@ -21,7 +21,7 @@ func TestAttachCreatesVolumeAttachmentAndWaitsAttached(t *testing.T) {
 		})
 
 	a := NewAttacher(cs)
-	err := a.Attach(context.Background(), AttachRequest{
+	_, err := a.Attach(context.Background(), AttachRequest{
 		PVName: "pv-1", NodeName: "node-a", Attacher: "luks.csi.nfcs.io",
 	})
 	if err != nil {
@@ -30,6 +30,28 @@ func TestAttachCreatesVolumeAttachmentAndWaitsAttached(t *testing.T) {
 	vas, _ := cs.StorageV1().VolumeAttachments().List(context.Background(), metav1.ListOptions{})
 	if len(vas.Items) != 1 {
 		t.Fatalf("expected 1 VolumeAttachment, got %d", len(vas.Items))
+	}
+}
+
+func TestAttachReturnsAttachmentMetadata(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+	cs.PrependReactor("create", "volumeattachments",
+		func(a k8stesting.Action) (bool, runtime.Object, error) {
+			va := a.(k8stesting.CreateAction).GetObject().(*storagev1.VolumeAttachment)
+			va.Status.Attached = true
+			va.Status.AttachmentMetadata = map[string]string{"devicePath": "/dev/rbd0"}
+			return false, va, nil
+		})
+
+	a := NewAttacher(cs)
+	meta, err := a.Attach(context.Background(), AttachRequest{
+		PVName: "pv-1", NodeName: "node-a", Attacher: "rbd.csi.ceph.com",
+	})
+	if err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	if meta["devicePath"] != "/dev/rbd0" {
+		t.Fatalf("meta[devicePath] = %q, want /dev/rbd0", meta["devicePath"])
 	}
 }
 
