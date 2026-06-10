@@ -38,7 +38,7 @@ func TestCreateVolumeDefaultsToRetain(t *testing.T) {
 	resp, err := c.CreateVolume(context.Background(), &csi.CreateVolumeRequest{
 		Name: "pvc-abc",
 		Parameters: map[string]string{
-			"institution":        "bristol",
+			"institution":         "bristol",
 			"backingStorageClass": "ceph-block",
 		},
 		VolumeCapabilities: []*csi.VolumeCapability{
@@ -91,6 +91,30 @@ func TestDeleteVolumeUnknownPolicyReturnsInvalidArgument(t *testing.T) {
 	})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("code = %v, want InvalidArgument for unknown policy", status.Code(err))
+	}
+}
+
+func TestCreateVolumeExposesBackingPVCName(t *testing.T) {
+	svc := New(Deps{Vault: &fakeVault{}, Backing: &fakeBacking{}})
+	resp, err := svc.CreateVolume(context.Background(), &csi.CreateVolumeRequest{
+		Name: "vol-1",
+		VolumeCapabilities: []*csi.VolumeCapability{
+			{AccessMode: &csi.VolumeCapability_AccessMode{Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER}},
+		},
+		Parameters: map[string]string{
+			"institution":         "bristol",
+			"backingStorageClass": "longhorn",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateVolume: %v", err)
+	}
+	pvcName := resp.GetVolume().GetVolumeContext()["backingPVCName"]
+	if pvcName == "" {
+		t.Fatal("backingPVCName missing from VolumeContext")
+	}
+	if pvcName != backingName("bristol", "vol-1") {
+		t.Fatalf("backingPVCName = %q, want %q", pvcName, backingName("bristol", "vol-1"))
 	}
 }
 

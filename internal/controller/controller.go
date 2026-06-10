@@ -92,6 +92,7 @@ func (s *Service) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest
 	volID := fmt.Sprintf("%s/%s/%s", institution, name, policy)
 	volumeCtx := map[string]string{
 		"backingPV":      pvName,
+		"backingPVCName": backing,
 		"institution":    institution,
 		"luksType":       "luks2",
 		"deletionPolicy": policy,
