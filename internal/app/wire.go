@@ -56,10 +56,16 @@ func BuildNode(cfg Config) (*node.Service, error) {
 	if err != nil {
 		return nil, err
 	}
+	cs, err := newKubeClient()
+	if err != nil {
+		return nil, fmt.Errorf("app: build k8s clientset: %w", err)
+	}
+	reg := device.NewDefaultRegistry()
+	reg.Register(device.NewLonghornResolver(cs, ""))
 	return node.New(node.Deps{
 		Keys:   &nodeKeySource{vault: vc},
 		Luks:   luks.New(luks.NewExecRunner("cryptsetup")),
-		Device: &deviceAdapter{reg: device.NewDefaultRegistry()},
+		Device: &deviceAdapter{reg: reg},
 		Mount:  &execMounter{},
 	}), nil
 }
