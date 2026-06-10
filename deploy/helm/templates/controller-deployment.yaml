@@ -61,21 +61,6 @@ spec:
             limits:   { cpu: 200m, memory: 128Mi }
           volumeMounts:
             - { name: socket-dir, mountPath: /csi }
-        - name: external-attacher
-          image: "{{ .Values.sidecars.attacher }}"
-          args: ["--csi-address=/csi/csi.sock", "--leader-election"]
-          securityContext:
-            runAsNonRoot: true
-            runAsUser: 65532
-            readOnlyRootFilesystem: true
-            allowPrivilegeEscalation: false
-            capabilities: { drop: ["ALL"] }
-            seccompProfile: { type: RuntimeDefault }
-          resources:
-            requests: { cpu: 20m, memory: 32Mi }
-            limits:   { cpu: 200m, memory: 128Mi }
-          volumeMounts:
-            - { name: socket-dir, mountPath: /csi }
       volumes:
         - { name: socket-dir, emptyDir: {} }
         - { name: vault-ca, secret: { secretName: luks-csi-vault-ca } }

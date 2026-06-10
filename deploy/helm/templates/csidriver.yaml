@@ -3,7 +3,7 @@ kind: CSIDriver
 metadata:
   name: luks.csi.nfcs.io
 spec:
-  attachRequired: true
+  attachRequired: false
   podInfoOnMount: true
   volumeLifecycleModes:
     - Persistent

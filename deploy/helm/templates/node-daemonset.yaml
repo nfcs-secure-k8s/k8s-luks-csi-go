@@ -23,6 +23,8 @@ spec:
             - { name: VAULT_ADDR, value: "{{ .Values.vault.addr }}" }
             - { name: VAULT_CACERT, value: "/etc/vault/ca.pem" }
             - { name: LOG_LEVEL, value: "{{ .Values.logLevel }}" }
+            - { name: LUKS_CSI_STAGING_NS, value: "{{ .Values.stagingNamespace }}" }
+            - { name: LUKS_CSI_BACKING_NS, value: "{{ .Values.backingNamespace }}" }
             - name: KUBE_NODE_NAME
               valueFrom:
                 fieldRef:

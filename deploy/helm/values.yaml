@@ -8,7 +8,8 @@ logLevel: INFO
 vault:
   addr: "https://vault.internal:8200"
   namespace: "vault"
+stagingNamespace: luks-csi-staging
+backingNamespace: luks-csi-backing
 sidecars:
   provisioner: "registry.k8s.io/sig-storage/csi-provisioner:v5.2.0"
-  attacher:    "registry.k8s.io/sig-storage/csi-attacher:v4.8.0"
   registrar:   "registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.13.0"
