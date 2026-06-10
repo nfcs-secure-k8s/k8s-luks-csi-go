@@ -23,6 +23,10 @@ spec:
             - { name: VAULT_ADDR, value: "{{ .Values.vault.addr }}" }
             - { name: VAULT_CACERT, value: "/etc/vault/ca.pem" }
             - { name: LOG_LEVEL, value: "{{ .Values.logLevel }}" }
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
           securityContext:
             privileged: true
             readOnlyRootFilesystem: true
