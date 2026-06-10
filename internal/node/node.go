@@ -78,6 +78,9 @@ func (s *Service) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeR
 
 	device, err := s.deps.Device.ResolveAndAttach(ctx, req.GetVolumeContext())
 	if err != nil {
+		if dbg.Enabled {
+			slog.Debug("node stage resolve error", "err", err)
+		}
 		slog.Warn("node stage failed", "op", "resolve device")
 		return nil, csierr.Wrap(codes.Internal, "resolve device", err)
 	}
