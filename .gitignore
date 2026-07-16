@@ -6,3 +6,6 @@ coverage.*
 
 # Built driver binary
 /luks-csi
+
+# Internal planning/spec artifacts — not published
+/docs/superpowers/
