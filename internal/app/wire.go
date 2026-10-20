@@ -87,6 +87,7 @@ func BuildNode(cfg Config) (*node.Service, error) {
 	reg.Register(device.NewLonghornResolver())
 	reg.Register(device.NewCephResolver(cs))
 	reg.Register(device.NewCinderResolver())
+	reg.Register(device.NewKubeletResolver())
 
 	return node.New(node.Deps{
 		Keys:   &nodeKeySource{vault: vc},

@@ -100,6 +100,37 @@ func TestNodeStageCallsEnsureStaged(t *testing.T) {
 	}
 }
 
+func TestNodeStagePassesStagingPodUIDToResolver(t *testing.T) {
+	fs := &fakeStager{uid: "99e8e8f9-60ac-4876-a874-aba77ae63dfd"}
+	fd := &fakeDevice{path: "/dev/x"}
+	s := New(Deps{
+		Keys:   &fakeKeySource{},
+		Luks:   &fakeLUKS{isLUKS: true},
+		Device: fd,
+		Mount:  &fakeMounter{},
+		Stager: fs,
+	})
+	reqVC := map[string]string{"backingPVCName": "luks-backing-abc"}
+	_, err := s.NodeStageVolume(context.Background(), &csi.NodeStageVolumeRequest{
+		VolumeId:          "bristol/vol-1/Retain",
+		StagingTargetPath: "/stage",
+		VolumeContext:     reqVC,
+		Secrets:           map[string]string{"roleId": "r", "secretId": "s"},
+	})
+	if err != nil {
+		t.Fatalf("NodeStageVolume: %v", err)
+	}
+	if got := fd.vc["stagingPodUID"]; got != fs.uid {
+		t.Fatalf("resolver stagingPodUID = %q, want %q", got, fs.uid)
+	}
+	if got := fd.vc["backingPVCName"]; got != "luks-backing-abc" {
+		t.Fatalf("resolver backingPVCName = %q, want original volume context preserved", got)
+	}
+	if _, ok := reqVC["stagingPodUID"]; ok {
+		t.Fatal("request VolumeContext was mutated")
+	}
+}
+
 func TestNodeUnstageCallsReleaseStaged(t *testing.T) {
 	fs := &fakeStager{}
 	s := New(Deps{
@@ -182,21 +213,26 @@ func (f *fakeLUKS) Open(_ context.Context, _, _ string, _ *keyzero.Buffer) error
 func (f *fakeLUKS) MakeFS(_ context.Context, _ string) error { f.madeFS = true; return nil }
 func (f *fakeLUKS) Close(_ context.Context, _ string) error  { return nil }
 
-type fakeDevice struct{ path string }
+type fakeDevice struct {
+	path string
+	vc   map[string]string
+}
 
-func (f *fakeDevice) ResolveAndAttach(_ context.Context, _ map[string]string) (string, error) {
+func (f *fakeDevice) ResolveAndAttach(_ context.Context, vc map[string]string) (string, error) {
+	f.vc = vc
 	return f.path, nil
 }
 
 type fakeStager struct {
 	ensureCalled  bool
 	releaseCalled bool
+	uid           string
 	err           error
 }
 
-func (f *fakeStager) EnsureStaged(_ context.Context, _ string, _ map[string]string) error {
+func (f *fakeStager) EnsureStaged(_ context.Context, _ string, _ map[string]string) (string, error) {
 	f.ensureCalled = true
-	return f.err
+	return f.uid, f.err
 }
 
 func (f *fakeStager) ReleaseStaged(_ context.Context, _ string) error {

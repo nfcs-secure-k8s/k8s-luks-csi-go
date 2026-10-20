@@ -21,6 +21,7 @@ const (
 	testBackingNS = "luks-csi-backing"
 	testNode      = "node-1"
 	testPauseImg  = "registry.k8s.io/pause:3.9"
+	testPodUID    = "99e8e8f9-60ac-4876-a874-aba77ae63dfd"
 )
 
 func newManager(cs *fake.Clientset) *staging.Manager {
@@ -56,6 +57,7 @@ func fakeNode(cs *fake.Clientset, taints []corev1.Taint) {
 func runningOnCreate(cs *fake.Clientset) {
 	cs.PrependReactor("create", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		pod := a.(k8stesting.CreateAction).GetObject().(*corev1.Pod)
+		pod.UID = testPodUID
 		pod.Status.Phase = corev1.PodRunning
 		return false, pod, nil
 	})
@@ -72,7 +74,7 @@ func TestEnsureStagedCreatesPodAndWaitsRunning(t *testing.T) {
 	pvc := fakePVC(cs, "luks-backing-abc123")
 	runningOnCreate(cs)
 
-	if err := newManager(cs).EnsureStaged(context.Background(), "bristol/vol-1/Retain", map[string]string{
+	if _, err := newManager(cs).EnsureStaged(context.Background(), "bristol/vol-1/Retain", map[string]string{
 		"backingPVCName": pvc.Name,
 	}); err != nil {
 		t.Fatalf("EnsureStaged: %v", err)
@@ -102,7 +104,7 @@ func TestEnsureStagedPropagatesNodeTaints(t *testing.T) {
 	pvc := fakePVC(cs, "luks-backing-abc123")
 	runningOnCreate(cs)
 
-	_ = newManager(cs).EnsureStaged(context.Background(), "bristol/vol-1/Retain", map[string]string{
+	_, _ = newManager(cs).EnsureStaged(context.Background(), "bristol/vol-1/Retain", map[string]string{
 		"backingPVCName": pvc.Name,
 	})
 
@@ -125,7 +127,7 @@ func TestEnsureStagedAnnotatesVolumeHash(t *testing.T) {
 	pvc := fakePVC(cs, "luks-backing-abc123")
 	runningOnCreate(cs)
 
-	_ = newManager(cs).EnsureStaged(context.Background(), "bristol/vol-1/Retain", map[string]string{
+	_, _ = newManager(cs).EnsureStaged(context.Background(), "bristol/vol-1/Retain", map[string]string{
 		"backingPVCName": pvc.Name,
 	})
 
@@ -148,7 +150,7 @@ func TestEnsureStagedHasNoOwnerReference(t *testing.T) {
 	pvc := fakePVC(cs, "luks-backing-abc123")
 	runningOnCreate(cs)
 
-	_ = newManager(cs).EnsureStaged(context.Background(), "bristol/vol-1/Retain", map[string]string{
+	_, _ = newManager(cs).EnsureStaged(context.Background(), "bristol/vol-1/Retain", map[string]string{
 		"backingPVCName": pvc.Name,
 	})
 
@@ -170,10 +172,10 @@ func TestEnsureStagedIdempotent(t *testing.T) {
 
 	vc := map[string]string{"backingPVCName": pvc.Name}
 	m := newManager(cs)
-	if err := m.EnsureStaged(context.Background(), "bristol/vol-1/Retain", vc); err != nil {
+	if _, err := m.EnsureStaged(context.Background(), "bristol/vol-1/Retain", vc); err != nil {
 		t.Fatalf("first: %v", err)
 	}
-	if err := m.EnsureStaged(context.Background(), "bristol/vol-1/Retain", vc); err != nil {
+	if _, err := m.EnsureStaged(context.Background(), "bristol/vol-1/Retain", vc); err != nil {
 		t.Fatalf("second (idempotent): %v", err)
 	}
 
@@ -195,7 +197,7 @@ func TestEnsureStagedDeletesStaleFailedPod(t *testing.T) {
 	})
 	runningOnCreate(cs)
 
-	if err := newManager(cs).EnsureStaged(context.Background(), "bristol/vol-1/Retain", map[string]string{
+	if _, err := newManager(cs).EnsureStaged(context.Background(), "bristol/vol-1/Retain", map[string]string{
 		"backingPVCName": pvc.Name,
 	}); err != nil {
 		t.Fatalf("EnsureStaged after stale pod: %v", err)
@@ -226,7 +228,7 @@ func TestEnsureStagedRecoversFromPendingPod(t *testing.T) {
 		}, nil
 	})
 
-	if err := newManager(cs).EnsureStaged(context.Background(), "bristol/vol-1/Retain", map[string]string{
+	if _, err := newManager(cs).EnsureStaged(context.Background(), "bristol/vol-1/Retain", map[string]string{
 		"backingPVCName": pvc.Name,
 	}); err != nil {
 		t.Fatalf("EnsureStaged from pending: %v", err)
@@ -295,5 +297,43 @@ func TestReconcileOrphansDeletesTerminalPods(t *testing.T) {
 	}
 	if len(survivors) != 2 || !survivors["pod-running"] || !survivors["pod-other-node"] {
 		t.Fatalf("expected pod-running and pod-other-node to survive, got %v", pods.Items)
+	}
+}
+
+func TestEnsureStagedReturnsCreatedPodUID(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+	fakeNode(cs, nil)
+	pvc := fakePVC(cs, "luks-backing-abc123")
+	runningOnCreate(cs)
+
+	uid, err := newManager(cs).EnsureStaged(context.Background(), "bristol/vol-1/Retain", map[string]string{
+		"backingPVCName": pvc.Name,
+	})
+	if err != nil {
+		t.Fatalf("EnsureStaged: %v", err)
+	}
+	if uid != testPodUID {
+		t.Fatalf("uid = %q, want %q", uid, testPodUID)
+	}
+}
+func TestEnsureStagedReturnsUIDOfAlreadyRunningPod(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+	_ = cs.Tracker().Add(&corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "luks-stage-" + sha256hex16("bristol/vol-1/Retain"),
+			Namespace: testStagingNS,
+			UID:       types.UID(testPodUID),
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	})
+
+	uid, err := newManager(cs).EnsureStaged(context.Background(), "bristol/vol-1/Retain", map[string]string{
+		"backingPVCName": "luks-backing-abc123",
+	})
+	if err != nil {
+		t.Fatalf("EnsureStaged: %v", err)
+	}
+	if uid != testPodUID {
+		t.Fatalf("uid = %q, want %q", uid, testPodUID)
 	}
 }

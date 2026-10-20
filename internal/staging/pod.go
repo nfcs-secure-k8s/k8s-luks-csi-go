@@ -56,52 +56,53 @@ func New(cs kubernetes.Interface, cfg Config) *Manager {
 }
 
 // EnsureStaged idempotently creates a staging pod for the given volumeID and
-// waits until it is Running. Stale Failed/Succeeded pods are deleted and
+// waits until it is Running, returning the pod UID (kubelet keys the published
+// backing device by it). Stale Failed/Succeeded pods are deleted and
 // recreated. The backingPVCName key must be present in vc.
-func (m *Manager) EnsureStaged(ctx context.Context, volumeID string, vc map[string]string) error {
+func (m *Manager) EnsureStaged(ctx context.Context, volumeID string, vc map[string]string) (string, error) {
 	podName := stagingPodName(volumeID)
 
 	existing, err := m.cs.CoreV1().Pods(m.cfg.StagingNS).Get(ctx, podName, metav1.GetOptions{})
 	if err == nil {
 		switch existing.Status.Phase {
 		case corev1.PodRunning:
-			return nil // already staged
+			return string(existing.UID), nil // already staged
 		case corev1.PodFailed, corev1.PodSucceeded:
 			slog.Info("staging: deleting stale terminal pod", "pod", podName, "phase", existing.Status.Phase)
 			if err := m.cs.CoreV1().Pods(m.cfg.StagingNS).Delete(ctx, podName, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-				return fmt.Errorf("staging: delete stale pod: %w", err)
+				return "", fmt.Errorf("staging: delete stale pod: %w", err)
 			}
 			// The deleted pod can linger (DeletionTimestamp set) while terminating.
 			// Wait for it to be fully gone before Create, otherwise Create returns
 			// AlreadyExists and waitRunning reads the still-terminating Failed pod.
 			if err := m.waitDeleted(ctx, podName); err != nil {
-				return err
+				return "", err
 			}
 		}
 		// Pending/Unknown — fall through to Create (idempotent) then wait.
 	} else if !apierrors.IsNotFound(err) {
-		return fmt.Errorf("staging: get pod: %w", err)
+		return "", fmt.Errorf("staging: get pod: %w", err)
 	}
 
 	backingPVC := vc["backingPVCName"]
 	if backingPVC == "" {
-		return fmt.Errorf("staging: backingPVCName missing from volume context")
+		return "", fmt.Errorf("staging: backingPVCName missing from volume context")
 	}
 
 	node, err := m.cs.CoreV1().Nodes().Get(ctx, m.cfg.NodeName, metav1.GetOptions{})
 	if err != nil {
-		return fmt.Errorf("staging: get node: %w", err)
+		return "", fmt.Errorf("staging: get node: %w", err)
 	}
 
 	// Existence pre-check: fail fast if the backing PVC is absent rather than
 	// letting the staging pod hang Pending until the staging timeout.
 	if _, err := m.cs.CoreV1().PersistentVolumeClaims(m.cfg.BackingNS).Get(ctx, backingPVC, metav1.GetOptions{}); err != nil {
-		return fmt.Errorf("staging: get backing pvc: %w", err)
+		return "", fmt.Errorf("staging: get backing pvc: %w", err)
 	}
 
 	pod := buildPod(podName, m.cfg.StagingNS, backingPVC, m.cfg.NodeName, m.cfg.PauseImage, volumeID, node.Spec.Taints)
 	if _, err := m.cs.CoreV1().Pods(m.cfg.StagingNS).Create(ctx, pod, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("staging: create pod: %w", err)
+		return "", fmt.Errorf("staging: create pod: %w", err)
 	}
 
 	return m.waitRunning(ctx, podName)
@@ -142,9 +143,11 @@ func (m *Manager) ReconcileOrphans(ctx context.Context) error {
 	return nil
 }
 
-// waitRunning polls until the named pod reaches Running phase or the context deadline.
-func (m *Manager) waitRunning(ctx context.Context, podName string) error {
-	return wait.PollUntilContextTimeout(ctx, pollInterval, m.cfg.Timeout, true,
+// waitRunning polls until the named pod reaches Running phase or the context
+// deadline, and returns the Running pod's UID.
+func (m *Manager) waitRunning(ctx context.Context, podName string) (string, error) {
+	var uid string
+	err := wait.PollUntilContextTimeout(ctx, pollInterval, m.cfg.Timeout, true,
 		func(ctx context.Context) (bool, error) {
 			pod, err := m.cs.CoreV1().Pods(m.cfg.StagingNS).Get(ctx, podName, metav1.GetOptions{})
 			if err != nil {
@@ -152,6 +155,7 @@ func (m *Manager) waitRunning(ctx context.Context, podName string) error {
 			}
 			switch pod.Status.Phase {
 			case corev1.PodRunning:
+				uid = string(pod.UID)
 				return true, nil
 			case corev1.PodFailed, corev1.PodSucceeded:
 				detail := ""
@@ -165,6 +169,7 @@ func (m *Manager) waitRunning(ctx context.Context, podName string) error {
 			}
 			return false, nil
 		})
+	return uid, err
 }
 
 // waitDeleted polls until the named pod no longer exists.
