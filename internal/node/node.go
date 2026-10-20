@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"strings"
 
@@ -51,7 +52,8 @@ type Mounter interface {
 // Stager manages staging pods that trigger the backing CSI driver's
 // NodeStageVolume, making the backing block device visible on the host.
 type Stager interface {
-	EnsureStaged(ctx context.Context, volumeID string, volumeContext map[string]string) error
+	// EnsureStaged returns the staging pod UID.
+	EnsureStaged(ctx context.Context, volumeID string, volumeContext map[string]string) (string, error)
 	ReleaseStaged(ctx context.Context, volumeID string) error
 	ReconcileOrphans(ctx context.Context) error
 }
@@ -85,14 +87,23 @@ func (s *Service) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeR
 			fmt.Errorf("missing per-tenant vault credential in node-stage secrets"))
 	}
 
+	volumeContext := req.GetVolumeContext()
 	if s.deps.Stager != nil {
-		if err := s.deps.Stager.EnsureStaged(ctx, req.GetVolumeId(), req.GetVolumeContext()); err != nil {
+		podUID, err := s.deps.Stager.EnsureStaged(ctx, req.GetVolumeId(), volumeContext)
+		if err != nil {
 			slog.Warn("node stage failed", "op", "ensure staged")
 			return nil, csierr.Wrap(codes.Internal, "ensure staged", err)
 		}
+		// Copy rather than mutate the request; resolvers such as "kubelet"
+		// locate the backing device via the staging pod UID.
+		volumeContext = maps.Clone(volumeContext)
+		if volumeContext == nil {
+			volumeContext = map[string]string{}
+		}
+		volumeContext["stagingPodUID"] = podUID
 	}
 
-	device, err := s.deps.Device.ResolveAndAttach(ctx, req.GetVolumeContext())
+	device, err := s.deps.Device.ResolveAndAttach(ctx, volumeContext)
 	if err != nil {
 		if dbg.Enabled {
 			slog.Debug("node stage resolve error", "err", err)
